@@ -86,8 +86,17 @@ function authHeader(method) {
   return h;
 }
 
+// 设备未登录/被踢/锁定时仍返回 <RGW> 骨架, 真实原因在 <login_status>;
+// 只排除 UNAUTHORIZED 会把 KICKOFF 误判为成功(数据全空且不报错)。
+const AUTH_FAIL = /<login_status>\s*(UNAUTHORIZED|KICKOFF|LOCK|NOTLOGIN)\s*<\/login_status>/i;
+const authReason = (body) => {
+  const m = String(body || '').match(AUTH_FAIL);
+  return m ? m[1].toUpperCase() : '';
+};
+const authError = (why) => new Error(
+  `设备拒绝登录(${why || 'NOAUTH'}): 账号或密码不正确, 请确认 WIFI_PASS / config.local.json`);
 function xmlOk(body) {
-  return body.includes('<RGW') && !body.includes('UNAUTHORIZED');
+  return body.includes('<RGW') && !AUTH_FAIL.test(body);
 }
 
 async function fetchXml(file) {
@@ -97,7 +106,10 @@ async function fetchXml(file) {
       `${CFG.host}/xml_action.cgi?method=get&module=duster&file=${file}&_=${Date.now()}`,
       authHeader('GET'), 12);
     if (xmlOk(r.body)) return r.body;
-    if (attempt === 1) throw new Error(`获取设备数据 ${file} 失败`);
+    if (attempt === 1) {
+      const why = authReason(r.body);
+      throw why ? authError(why) : new Error(`获取设备数据 ${file} 失败`);
+    }
     await login();
   }
 }
@@ -113,7 +125,10 @@ async function fetchXmlParallel(files) {
     const retry = await Promise.all(failed.map(f =>
       rawGet(`${CFG.host}/xml_action.cgi?method=get&module=duster&file=${f}&_=${Date.now()}`, authHeader('GET'), 12)));
     retry.forEach((r, i) => {
-      if (!xmlOk(r.body)) throw new Error(`获取设备数据 ${failed[i]} 失败`);
+      if (!xmlOk(r.body)) {
+        const why = authReason(r.body);
+        throw why ? authError(why) : new Error(`获取设备数据 ${failed[i]} 失败`);
+      }
       results[files.indexOf(failed[i])] = { status: 'fulfilled', value: r.body };
     });
   }

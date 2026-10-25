@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="theme-color" content="#0d1322">
 <script>
   /* APK(file://) 模式: 同步预载内置网关, 服务器模式由后端提供接口 */
   // APK 内置模式: file:// (旧) 或挂在设备域名 /dashboard 下 (与设备同源, 设备拒绝异源请求)
@@ -70,6 +73,10 @@
         <div>
           <div class="pct"><span id="batPct">--</span><small>%</small></div>
           <div class="battery-state" id="batState">--</div>
+        </div>
+        <div class="battery-eta">
+          <div class="eta-v" id="batEta">--</div>
+          <div class="eta-k" id="batEtaNote">剩余续航</div>
         </div>
         <div class="batt"><div class="batt-fill" id="batFill" style="width:0%"></div></div>
       </div>
@@ -329,6 +336,107 @@
 const history = { rx: [], tx: [], max: 60 };
 let lastRestRender = 0;   // 非网速区块降频: 每 30s 才随轮询刷新一次
 
+/* ---------- 剩余续航估算 ----------
+ * 公式:
+ *   放电速率 r = (起始电量 − 当前电量) / 已用时长        单位 %/小时
+ *   剩余续航 T = 当前电量 / r                           单位 小时
+ *
+ * 电量按 1% 才跳一次, 单点误差大, 所以用"一段区间的平均速率":
+ *   - 首次运行用基准点 09:00 / 75% 打底, 之后随真实采样累积;
+ *   - 电量回升(充过电)时结束本轮, 把算出的速率存档, 充电期间用它估算;
+ *   - 采样只保留最近 24 小时, 最多 240 个点。
+ */
+const BATT_RUN = 'batt_run';        // 本轮放电采样 [{t,p}]
+const BATT_LAST = 'batt_last';      // 上一次有效放电速率 {rate,t}
+const BATT_SEEDED = 'batt_seeded';  // 基准点是否已打过
+const BATT_SEED_HOUR = 9, BATT_SEED_PCT = 75;   // 基准点: 09:00 电量 75%
+const BATT_KEEP_MS = 864e5;                     // 只保留 24 小时内的样本
+const BATT_SAMPLE_GAP = 3e5;                    // 电量没变时最多每 5 分钟补一个样本
+
+function battRead(k, dft) {
+  try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? dft : v; }
+  catch (e) { return dft; }
+}
+function battWrite(k, v) {
+  try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 隐私模式忽略 */ }
+}
+
+/** 由样本序列算平均放电速率 (%/小时), 数据不足返回 0 */
+function battRate(run) {
+  if (!run || run.length < 2) return 0;
+  const a = run[0], b = run[run.length - 1];
+  const hours = (b.t - a.t) / 36e5;
+  const drained = a.p - b.p;
+  if (hours <= 0.05 || drained <= 0) return 0;
+  return drained / hours;
+}
+
+/** 记录采样, 返回 { charging, rate } */
+function battUpdate(percent, charging) {
+  const now = Date.now();
+  let run = (battRead(BATT_RUN, []) || [])
+    .filter(x => x && typeof x.p === 'number' && now - x.t < BATT_KEEP_MS);
+  const lastStored = battRead(BATT_LAST, null);
+
+  // 首次运行: 用给定基准点打底 (09:00 / 75%)
+  if (!run.length && !battRead(BATT_SEEDED, false) && !lastStored) {
+    const seed = new Date();
+    seed.setHours(BATT_SEED_HOUR, 0, 0, 0);
+    if (now > seed.getTime()) {
+      run = [{ t: seed.getTime(), p: BATT_SEED_PCT }];
+      battWrite(BATT_SEEDED, true);
+    }
+  }
+
+  if (charging) {
+    if (!run.length) run = [{ t: now, p: percent }];
+    const r = battRate(run);
+    if (r) battWrite(BATT_LAST, { rate: r, t: now });
+    battWrite(BATT_RUN, []);            // 本轮放电结束
+    return { charging: true, rate: r || (lastStored ? lastStored.rate : 0) };
+  }
+
+  const prev = run[run.length - 1];
+  if (prev && percent > prev.p) {       // 电量回升 → 新周期
+    const r = battRate(run);
+    if (r) battWrite(BATT_LAST, { rate: r, t: now });
+    run = [];
+  }
+  if (!run.length) run = [{ t: now, p: percent }];
+  const tail = run[run.length - 1];
+  if (percent < tail.p || now - tail.t > BATT_SAMPLE_GAP) run.push({ t: now, p: percent });
+  battWrite(BATT_RUN, run.slice(-240));
+
+  return { charging: false, rate: battRate(run) || (lastStored ? lastStored.rate : 0) };
+}
+
+function fmtDur(h) {
+  if (!isFinite(h) || h <= 0) return '--';
+  if (h > 48) return '＞48 小时';
+  let m = Math.round(h * 60);
+  const d = Math.floor(m / 1440); m %= 1440;
+  const hh = Math.floor(m / 60), mm = m % 60;
+  if (d) return `${d} 天 ${hh} 小时`;
+  if (hh) return `${hh} 小时 ${mm} 分`;
+  return `${mm} 分`;
+}
+
+function battEta(percent, charging) {
+  const st = battUpdate(percent, charging);
+  if (!st.rate) return { v: '估算中', k: '需累积放电数据' };
+  const rate = st.rate.toFixed(1);
+  return {
+    v: '约 ' + fmtDur(percent / st.rate),
+    k: (st.charging ? '充电中 · ' : '耗电 ') + rate + ' %/时',
+  };
+}
+
+function renderBatteryEta(percent, charging) {
+  const e = battEta(percent, charging);
+  $('batEta').textContent = e.v;
+  $('batEtaNote').textContent = e.k;
+}
+
 function render(d) {
   renderSpeed(d);
   renderRest(d);
@@ -370,10 +478,13 @@ function renderRest(d) {
     const fill = $('batFill');
     fill.style.width = Math.min(100, d.battery.percent) + '%';
     fill.className = 'batt-fill ' + (d.battery.percent <= 15 ? 'bad' : d.battery.percent <= 30 || d.battery.charging ? 'warn' : '');
+    renderBatteryEta(d.battery.percent, d.battery.charging);
   } else {
     $('batPct').textContent = '--';
     $('batState').textContent = '未检测到电池';
     $('batFill').style.width = '0%';
+    $('batEta').textContent = '--';
+    $('batEtaNote').textContent = '剩余续航';
   }
 
   /* 流量入口卡（缓存值, 不触发设备请求） */

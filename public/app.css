@@ -124,6 +124,9 @@ a.brand { text-decoration: none; color: inherit; }
 .battery-row .pct { font-size: 34px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
 .battery-row .pct small { font-size: 15px; color: var(--muted); font-weight: 400; }
 .battery-state { font-size: 13px; color: var(--muted); margin-top: 4px; display: flex; align-items: center; gap: 5px; }
+.battery-eta { margin-left: auto; text-align: right; line-height: 1.25; padding-right: 2px; }
+.battery-eta .eta-v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.battery-eta .eta-k { font-size: 11px; color: var(--muted); margin-top: 2px; white-space: nowrap; }
 .batt {
   width: 64px; height: 30px; border: 2px solid #6b7899; border-radius: 6px;
   position: relative; padding: 3px; flex: none;

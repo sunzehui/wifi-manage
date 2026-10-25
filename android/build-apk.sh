@@ -24,21 +24,47 @@ cp ../public/*.html ../public/*.css ../public/*.js "$OUT/stage/assets/www/"
 [ -f ../preset.local.js ] && cp ../preset.local.js "$OUT/stage/assets/www/preset.js"
 echo "preset: $([ -f $OUT/stage/assets/www/preset.js ] && echo 已注入 || echo 无)"
 
-# 2. aapt2: manifest + resources + assets -> base.apk
+# 2. aapt2: 编译图标资源 -> manifest + resources + assets -> base.apk
+"$BT/aapt2" compile --dir res -o "$OUT/res.zip"
 "$BT/aapt2" link -I "$PLATFORM" \
   --manifest AndroidManifest.xml \
   --min-sdk-version 21 --target-sdk-version 28 \
+  -R "$OUT/res.zip" \
   -A "$OUT/stage/assets" \
   -o "$OUT/base.apk"
 
-# 3. javac + d8 -> classes.dex
-javac -source 1.8 -target 1.8 -nowarn \
-  -bootclasspath "$PLATFORM:/Users/sunzehui/Library/Java/JavaVirtualMachines/corretto-1.8.0_482/Contents/Home/jre/lib/rt.jar" \
-  -d "$OUT/classes" \
-  java/com/sunzehui/wifimanage/MainActivity.java
+# 3. kotlinc + d8 -> classes.dex
+#    查找 kotlinc: KOTLIN_HOME > brew 安装位置 > PATH
+KOTLINC=""
+for c in "${KOTLIN_HOME:-}/bin/kotlinc" \
+         "$HOME/.local/share/kotlinc/bin/kotlinc" \
+         "$(brew --prefix kotlin 2>/dev/null)/libexec/bin/kotlinc" \
+         "$(command -v kotlinc 2>/dev/null)"; do
+  [ -n "$c" ] && [ -x "$c" ] && KOTLINC="$c" && break
+done
+if [ -z "$KOTLINC" ]; then
+  echo "错误: 找不到 kotlinc。请安装 Kotlin 编译器后重试:" >&2
+  echo "  curl -L -o /tmp/k.zip https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip" >&2
+  echo "  mkdir -p ~/.local/share && unzip -q /tmp/k.zip -d ~/.local/share" >&2
+  exit 1
+fi
+KOTLIN_HOME_RESOLVED="$(cd "$(dirname "$KOTLINC")/.." && pwd)"
+STDLIB="$KOTLIN_HOME_RESOLVED/lib/kotlin-stdlib.jar"
+if [ ! -f "$STDLIB" ]; then
+  echo "错误: 找不到 kotlin-stdlib.jar ($STDLIB)" >&2
+  exit 1
+fi
+
+# 关掉运行期断言：Kotlin 默认会为公开函数插入参数/返回值的 null 检查，
+# 这种小工具没必要为它付出体积和调用开销。
+"$KOTLINC" -no-reflect \
+  -Xno-param-assertions -Xno-call-assertions -Xno-receiver-assertions \
+  -jvm-target 1.8 -classpath "$PLATFORM" -d "$OUT/classes" \
+  kotlin/com/sunzehui/wifimanage/MainActivity.kt
+# Kotlin 代码依赖 stdlib，必须和业务 class 一起 dex 进同一个 classes.dex
 "$BT/d8" --release --lib "$PLATFORM" --min-api 21 \
   --output "$OUT" \
-  $(find "$OUT/classes" -name '*.class')
+  $(find "$OUT/classes" -name '*.class') "$STDLIB"
 
 # 4. 合包 + 对齐 + 签名
 cd "$OUT"

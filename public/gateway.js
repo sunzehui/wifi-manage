@@ -39,13 +39,53 @@
     return { body: await res.text(), wwwAuth: res.headers.get('www-authenticate') || '' };
   }
 
-  let loginBlockedUntil = 0;   // 登录失败指数退避: 防止高频登录触发设备保护锁定
+  /* ---------------- 会话 (等价于 server.php 的 session 文件) ----------------
+   * 设备 httpd 同一时刻只允许一个管理会话: 任何一次新的登录都会把既有会话踢掉,
+   * 被踢的客户端此后一直收到 <login_status>KICKOFF</login_status>。所以必须像
+   * server.php 那样把 realm/nonce/nc 持久化复用, 只在完全没有会话时登录一次。
+   * 「失败就重登再重试」会把自己和设备一起踢死(实测: 连续登录后连电脑端也取不到
+   * 数据, 只能等设备重启或会话超时)。这是 App 与 PHP 版表现不同的根本原因。
+   */
+  const SESSION_KEY = 'mifi_session';
+  const SESSION_TTL = 30 * 60 * 1000;
+  let loginBlockedUntil = 0;   // 登录失败指数退避
+  let lastAuthReason = '';     // 设备最后一次给出的拒绝原因 (KICKOFF/UNAUTHORIZED/...)
+
+  function saveSession() {
+    try {
+      localStorage.setItem(SESSION_KEY, JSON.stringify({
+        realm: session.realm, nonce: session.nonce, qop: session.qop,
+        nc: session.nc, ts: Date.now(),
+      }));
+    } catch (e) { /* 存储不可用时退化为内存会话 */ }
+  }
+  function loadSession() {
+    try {
+      const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+      if (!s || !s.realm || !s.nonce) return false;
+      if (Date.now() - (s.ts || 0) > SESSION_TTL) return false;
+      session.realm = s.realm;
+      session.nonce = s.nonce;
+      session.qop = s.qop || 'auth';
+      session.nc = s.nc || 1;
+      return true;
+    } catch (e) { return false; }
+  }
+  function invalidateSession() {
+    session.nonce = null;
+    try { localStorage.removeItem(SESSION_KEY); } catch (e) { }
+  }
+  /** 有可用会话就直接复用(跨页面/跨重启), 避免多余登录把设备的唯一会话踢掉 */
+  function ensureSession() {
+    if (session.nonce && session.realm) return true;
+    return loadSession();
+  }
+
   async function login() {
     const cfg = cfgsafe();
     if (!cfg.pass) throw new Error('未配置设备密码: 点击右上角 ⚙ 设置');
     if (Date.now() < loginBlockedUntil) {
-      throw new Error('设备暂时拒绝登录(疑似触发登录保护), ' +
-        Math.ceil((loginBlockedUntil - Date.now()) / 1000) + ' 秒后自动恢复');
+      throw authError(lastAuthReason, Math.ceil((loginBlockedUntil - Date.now()) / 1000));
     }
     const r1 = await httpGet(cfg.host + '/login.cgi');
     const ch = C.parseChallenge(r1.wwwAuth);
@@ -54,11 +94,16 @@
     session.nonce = ch.nonce;
     session.qop = ch.qop;
     session.nc = 1;
+    // 设备即使登录成功也会再回一次质询(实测), 不能据此判定失败;
+    // 真正的判据是随后数据请求返回的 <login_status>。
     await httpGet(cfg.host + C.loginUrl(cfg, ch));
+    saveSession();
   }
-  function noteLoginResult(ok) {
+  function noteLoginResult(ok, reason) {
     loginBackoff = ok ? 0 : Math.min((loginBackoff || 30000) * 2, 600000);
-    if (!ok) loginBlockedUntil = Date.now() + loginBackoff;
+    if (ok) { lastAuthReason = ''; return; }
+    if (reason) lastAuthReason = reason;
+    loginBlockedUntil = Date.now() + loginBackoff;
   }
   let loginBackoff = 0;
   function cfgsafe() { return cfg(); }
@@ -66,58 +111,108 @@
   function authHeader(method) {
     const h = C.authHeader(cfg(), session, method, session.nc);
     session.nc += 1;
+    saveSession();
     return h;
   }
 
-  const ok = (b) => b.includes('<RGW') && !b.includes('UNAUTHORIZED');
+  // 设备在「未登录 / 会话被踢 / 登录锁定」时仍会返回 <RGW> 骨架,
+  // 真实原因只在 <login_status> 里。旧逻辑仅排除 UNAUTHORIZED, 会把 KICKOFF
+  // 误判成成功 → 页面所有字段为空且不报错(表现为「连不上后台」却没有任何提示)。
+  const AUTH_FAIL = /<login_status>\s*(UNAUTHORIZED|KICKOFF|LOCK|NOTLOGIN)\s*<\/login_status>/i;
+  const ok = (b) => b.includes('<RGW') && !AUTH_FAIL.test(b);
+  const authReason = (b) => {
+    const m = String(b || '').match(AUTH_FAIL);
+    return m ? m[1].toUpperCase() : '';
+  };
+  const authError = (reason, retrySec) => {
+    const wait = retrySec ? `, ${retrySec} 秒后自动重试` : '';
+    if (reason === 'KICKOFF') {
+      return new Error('设备把本机会话踢出了(同一台设备同一时间只允许一个管理会话, ' +
+        '多半是电脑端仪表盘也在访问)' + wait);
+    }
+    if (reason === 'LOCK') {
+      return new Error('设备登录已锁定(失败次数过多), 请稍后重试或重启随身 WiFi' + wait);
+    }
+    if (reason === 'NOTLOGIN' || reason === 'UNAUTHORIZED') {
+      return new Error('设备拒绝登录: 账号或密码不正确, 请点击右上角 ⚙ 确认设备后台密码' + wait);
+    }
+    return new Error('无法获取设备数据' + (reason ? `(${reason})` : '') + wait);
+  };
+
+  /** 会话类失败(被踢/未登录)只退避, 绝不连环重登 —— 否则会互相踢死设备会话 */
+  function failAuth(reason) {
+    invalidateSession();
+    noteLoginResult(false, reason);
+    return authError(reason);
+  }
 
   async function fetchXml(file) {
-    if (!session.nonce) await login();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await httpGet(`${cfg().host}/xml_action.cgi?method=get&module=duster&file=${file}&_=${Date.now()}`, authHeader('GET'));
-      if (ok(r.body)) { noteLoginResult(true); return r.body; }
-      if (attempt === 1) { noteLoginResult(false); throw new Error(`获取设备数据 ${file} 失败`); }
-      await login();
-    }
+    if (!ensureSession()) await login();
+    const url = `${cfg().host}/xml_action.cgi?method=get&module=duster&file=${file}&_=${Date.now()}`;
+    const r = await httpGet(url, authHeader('GET'));
+    if (ok(r.body)) { noteLoginResult(true); return r.body; }
+    const why = authReason(r.body);
+    if (why) throw failAuth(why);
+    // 非鉴权类失败(网络抖动/超时): 重新登录一次后重试
+    invalidateSession();
+    await login();
+    const r2 = await httpGet(url, authHeader('GET'));
+    if (ok(r2.body)) { noteLoginResult(true); return r2.body; }
+    const why2 = authReason(r2.body);
+    throw why2 ? failAuth(why2) : new Error(`获取设备数据 ${file} 失败`);
   }
 
   async function fetchXmlParallel(files) {
-    if (!session.nonce) await login();
-    const results = await Promise.allSettled(files.map(f =>
-      httpGet(`${cfg().host}/xml_action.cgi?method=get&module=duster&file=${f}&_=${Date.now()}`, authHeader('GET'))));
+    if (!ensureSession()) await login();
+    const urlOf = f => `${cfg().host}/xml_action.cgi?method=get&module=duster&file=${f}&_=${Date.now()}`;
+    const results = await Promise.allSettled(files.map(f => httpGet(urlOf(f), authHeader('GET'))));
     const out = {};
     const failed = [];
+    let why = '';
     files.forEach((f, i) => {
-      if (results[i].status === 'fulfilled' && ok(results[i].value.body)) out[f] = results[i].value.body;
-      else failed.push(f);
-    });
-    if (failed.length) {
-      noteLoginResult(false);
-      await login();
-      for (const f of failed) {
-        const r = await httpGet(`${cfg().host}/xml_action.cgi?method=get&module=duster&file=${f}&_=${Date.now()}`, authHeader('GET'));
-        if (!ok(r.body)) { noteLoginResult(false); throw new Error(`获取设备数据 ${f} 失败`); }
-        out[f] = r.body;
+      const r = results[i];
+      if (r.status === 'fulfilled' && ok(r.value.body)) out[f] = r.value.body;
+      else {
+        failed.push(f);
+        if (r.status === 'fulfilled') why = why || authReason(r.value.body);
       }
+    });
+    if (!failed.length) { noteLoginResult(true); return out; }
+    if (why) throw failAuth(why);          // 被踢/未登录: 退避即可, 不要重登
+
+    invalidateSession();                   // 网络类失败: 重登一次再试
+    await login();
+    for (const f of failed) {
+      const r = await httpGet(urlOf(f), authHeader('GET'));
+      if (!ok(r.body)) {
+        const w = authReason(r.body);
+        throw w ? failAuth(w) : new Error(`获取设备数据 ${f} 失败`);
+      }
+      out[f] = r.body;
     }
     noteLoginResult(true);
     return out;
   }
 
   async function postXml(file, xml) {
-    if (!session.nonce) await login();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const res = await fetch(`${cfg().host}/xml_action.cgi?method=set&module=duster&file=${file}`, {
-        method: 'POST',
-        headers: { Authorization: authHeader('POST') },
-        body: xml,
-        signal: AbortSignal.timeout(12000),
-      });
-      const body = await res.text();
-      if (!body.includes('UNAUTHORIZED') && !body.includes('Error')) { noteLoginResult(true); return body; }
-      if (attempt === 1) { noteLoginResult(false); throw new Error('设备拒绝了设置请求'); }
-      await login();
-    }
+    if (!ensureSession()) await login();
+    const send = () => fetch(`${cfg().host}/xml_action.cgi?method=set&module=duster&file=${file}`, {
+      method: 'POST',
+      headers: { Authorization: authHeader('POST') },
+      body: xml,
+      signal: AbortSignal.timeout(12000),
+    }).then(res => res.text());
+
+    let body = await send();
+    let why = authReason(body);
+    if (!why && !body.includes('UNAUTHORIZED') && !body.includes('Error')) { noteLoginResult(true); return body; }
+    if (why) throw failAuth(why);
+    invalidateSession();
+    await login();
+    body = await send();
+    why = authReason(body);
+    if (!why && !body.includes('UNAUTHORIZED') && !body.includes('Error')) { noteLoginResult(true); return body; }
+    throw why ? failAuth(why) : new Error('设备拒绝了设置请求');
   }
 
   function cacheGet(file, ttlSec) {
@@ -142,6 +237,28 @@
 
   /* ---------------- 发卡平台 ---------------- */
 
+  const MGX_TIMEOUT = 15000;
+
+  /** 平台响应前面有几行空白, 直接 JSON.parse 会失败, 从第一个 { 开始截 */
+  function parseLooseJson(text) {
+    const i = text.indexOf('{');
+    if (i < 0) return null;
+    try { return JSON.parse(text.slice(i)); } catch (e) { return null; }
+  }
+
+  async function mgxGet(path) {
+    const r = await fetch(cfgsafe().host + '/mgx' + path, {
+      credentials: 'include',
+      signal: AbortSignal.timeout(MGX_TIMEOUT),
+    });
+    const j = parseLooseJson(await r.text());
+    if (!j) throw new Error('发卡平台返回异常(响应无法解析)');
+    return j;
+  }
+
+  const mgxLoginPath = (card) =>
+    '/card/login.do?responseFunction=cb&iccidMark=' + encodeURIComponent(card);
+
   async function remoteTraffic(refresh) {
     const cfg = cfgsafe();
     if (!cfg.mgxCard) throw new Error('未配置发卡平台设备号: 点击右上角 ⚙ 设置');
@@ -149,17 +266,20 @@
       const e = cacheAny('mgx_traffic');
       if (e && (Date.now() - e.ts) / 1000 <= 120) return { ...JSON.parse(e.xml), cached: true };
     }
-    const lr = await fetch(`${cfg().host}/mgx/card/login.do?responseFunction=cb&iccidMark=${encodeURIComponent(cfg.mgxCard)}`,
-      { signal: AbortSignal.timeout(15000) });
-    const cookie = (lr.headers.get('set-cookie') || '').split(';')[0];
-    const lb = await lr.text();
-    const lj = JSON.parse(lb.slice(lb.indexOf('{')));
-    if (lj.code !== '0') throw new Error('发卡平台登录失败');
-    const ir = await fetch(`${cfg().host}/mgx/card/findCardInfo.do?iccidOrPhone=&responseFunction=cb&skipGift=true&rfm=${Math.random()}`,
-      { headers: { Cookie: cookie }, signal: AbortSignal.timeout(15000) });
-    const ib = await ir.text();
-    const info = JSON.parse(ib.slice(ib.indexOf('{')));
-    if (info.code !== '0') throw new Error('发卡平台查询失败');
+    const login = await mgxGet(mgxLoginPath(cfg.mgxCard));
+    if (login.code !== '0') throw new Error('发卡平台登录失败: ' + (login.msg || '设备号可能有误'));
+    const infoPath = '/card/findCardInfo.do?iccidOrPhone=&responseFunction=cb&skipGift=true&rfm=' + Math.random();
+    let info = await mgxGet(infoPath);
+    // 会话失效(平台返回 "session过期"): 重新登录后再取一次
+    if (info.code !== '0' && (String(info.system_result_key) === '7' ||
+        String(info.returnurl || '').indexOf('login') >= 0)) {
+      await mgxGet(mgxLoginPath(cfg.mgxCard));
+      info = await mgxGet(infoPath);
+    }
+    if (info.code !== '0') {
+      throw new Error('发卡平台查询失败: ' +
+        (info.system_result_message_key || info.msg || '会话已过期, 请稍后重试'));
+    }
     const out = C.buildRemoteTraffic(info, cfg.mgxCard);
     cachePut('mgx_traffic', JSON.stringify(out));
     return { ...out, cached: false };
