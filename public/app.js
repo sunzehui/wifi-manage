@@ -28,7 +28,8 @@ const apiViaServer = () => {
     },
   };
 };
-const Api = (location.protocol === 'file:')
+const APK_MODE = location.protocol === 'file:' || location.pathname.indexOf('/dashboard') === 0;
+const Api = (APK_MODE)
   ? (localStorage.getItem('mifi_server') ? apiViaServer() : {
     get: p => window.MifiGateway.get(p),
     post: (p, b) => window.MifiGateway.post(p, b),

@@ -16,7 +16,10 @@
 
   function cfg() {
     return {
-      host: LS.get('mifi_host', 'http://192.168.1.1'),
+      // 设备请求经 App 内置本地代理转发 (设备会 KICKOFF 带 Accept-Encoding 的请求,
+      // WebView fetch 无法去掉该头, 由 Java 代理 HttpURLConnection 转发)
+      host: LS.get('mifi_proxy', 'http://127.0.0.1:8787'),
+      devHost: LS.get('mifi_dev', 'http://192.168.1.1'),   // 仅供参考展示
       user: LS.get('mifi_user', 'admin'),
       pass: LS.get('mifi_pass', ''),
       mgxCard: LS.get('mgx_card', ''),
@@ -134,13 +137,13 @@
       const e = cacheAny('mgx_traffic');
       if (e && (Date.now() - e.ts) / 1000 <= 120) return { ...JSON.parse(e.xml), cached: true };
     }
-    const lr = await fetch(`http://xmgxx.maigaoxun.com/kyhl-weixin-1.0/card/login.do?responseFunction=cb&iccidMark=${encodeURIComponent(cfg.mgxCard)}`,
+    const lr = await fetch(`${cfg().host}/mgx/card/login.do?responseFunction=cb&iccidMark=${encodeURIComponent(cfg.mgxCard)}`,
       { signal: AbortSignal.timeout(15000) });
     const cookie = (lr.headers.get('set-cookie') || '').split(';')[0];
     const lb = await lr.text();
     const lj = JSON.parse(lb.slice(lb.indexOf('{')));
     if (lj.code !== '0') throw new Error('发卡平台登录失败');
-    const ir = await fetch(`http://xmgxx.maigaoxun.com/kyhl-weixin-1.0/card/findCardInfo.do?iccidOrPhone=&responseFunction=cb&skipGift=true&rfm=${Math.random()}`,
+    const ir = await fetch(`${cfg().host}/mgx/card/findCardInfo.do?iccidOrPhone=&responseFunction=cb&skipGift=true&rfm=${Math.random()}`,
       { headers: { Cookie: cookie }, signal: AbortSignal.timeout(15000) });
     const ib = await ir.text();
     const info = JSON.parse(ib.slice(ib.indexOf('{')));

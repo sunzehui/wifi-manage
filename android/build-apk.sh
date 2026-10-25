@@ -6,11 +6,13 @@ cd "$(dirname "$0")"
 
 SDK="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 BT="$SDK/build-tools/35.0.0"
-PLATFORM="$SDK/platforms/android-35/android.jar"
+PLATFORM=""
 OUT="build"
+JAVA_HOME="${JAVA_HOME:-$(/usr/libexec/java_home)}"
 APK="wifi-dashboard.apk"
 
-[ -f "$PLATFORM" ] || PLATFORM="$SDK/platforms/android-36/android.jar"
+[ -f "$SDK/platforms/android-35/android.jar" ] && PLATFORM="$SDK/platforms/android-35/android.jar"
+[ -z "$PLATFORM" ] && PLATFORM="$(ls $SDK/platforms/*/android.jar 2>/dev/null | sort -V | tail -1)"
 
 rm -rf "$OUT"
 mkdir -p "$OUT/classes" "$OUT/stage"
@@ -18,6 +20,9 @@ mkdir -p "$OUT/classes" "$OUT/stage"
 # 1. 准备 assets: 页面 + 内置网关
 mkdir -p "$OUT/stage/assets/www"
 cp ../public/*.html ../public/*.css ../public/*.js "$OUT/stage/assets/www/"
+# 本地预置配置(可选): preset.local.js -> assets/www/preset.js, App 首次打开即带配置
+[ -f ../preset.local.js ] && cp ../preset.local.js "$OUT/stage/assets/www/preset.js"
+echo "preset: $([ -f $OUT/stage/assets/www/preset.js ] && echo 已注入 || echo 无)"
 
 # 2. aapt2: manifest + resources + assets -> base.apk
 "$BT/aapt2" link -I "$PLATFORM" \
@@ -28,7 +33,7 @@ cp ../public/*.html ../public/*.css ../public/*.js "$OUT/stage/assets/www/"
 
 # 3. javac + d8 -> classes.dex
 javac -source 1.8 -target 1.8 -nowarn \
-  -bootclasspath "$PLATFORM" \
+  -bootclasspath "$PLATFORM:/Users/sunzehui/Library/Java/JavaVirtualMachines/corretto-1.8.0_482/Contents/Home/jre/lib/rt.jar" \
   -d "$OUT/classes" \
   java/com/sunzehui/wifimanage/MainActivity.java
 "$BT/d8" --release --lib "$PLATFORM" --min-api 21 \
@@ -37,8 +42,12 @@ javac -source 1.8 -target 1.8 -nowarn \
 
 # 4. 合包 + 对齐 + 签名
 cd "$OUT"
-cp base.apk unsigned.apk
-zip -qj unsigned.apk classes.dex
+# macOS zip 向已有包添加条目时会保留重复条目(旧 assets 不被覆盖),
+# 因此先解包 base.apk 再与 classes.dex 重新打整包
+rm -rf pkg && mkdir pkg
+unzip -q base.apk -d pkg
+cp classes.dex pkg/
+( cd pkg && zip -qr ../unsigned.apk . )
 "$BT/zipalign" -f 4 unsigned.apk aligned.apk
 
 KS=../debug.keystore

@@ -6,12 +6,23 @@
 <meta name="color-scheme" content="dark">
 <script>
   /* APK(file://) 模式: 同步预载内置网关, 服务器模式由后端提供接口 */
-  if (location.protocol === "file:") {
-    document.write("<script src=\"core.js\"><\/script><script src=\"gateway.js\"><\/script>");
+  // APK 内置模式: file:// (旧) 或挂在设备域名 /dashboard 下 (与设备同源, 设备拒绝异源请求)
+  if (location.protocol === "file:" || location.pathname.indexOf("/dashboard") === 0) {
+    document.write("<script src=\"preset.js\"><\/script><script src=\"core.js\"><\/script><script src=\"gateway.js\"><\/script>");
+    // 站内绝对路径链接改写为本地页面 (服务器模式不受影响)
+    document.addEventListener("DOMContentLoaded", () => {
+      const base = location.pathname.indexOf("/dashboard") === 0 ? "/dashboard/" : "";
+      document.querySelectorAll('a[href^="/"]').forEach(a => {
+        const h = a.getAttribute("href");
+        if (h === "/" || h === "/traffic" || h === "/devices") {
+          a.setAttribute("href", base + (h === "/" ? "index" : h.slice(1)) + ".html");
+        }
+      });
+    });
   }
 </script>
 <title>流量统计 · 随身 WiFi</title>
-<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
 
@@ -126,7 +137,7 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="/app.js"></script>
+<script src="app.js"></script>
 <script>
 let traffic = null;
 
