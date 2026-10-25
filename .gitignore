@@ -3,3 +3,8 @@
 .DS_Store
 config.local.php
 result-image-1.jpg
+
+config.local.json
+android/build/
+android/debug.keystore
+node_modules/

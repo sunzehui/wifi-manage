@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<script>
+  /* APK(file://) 模式: 同步预载内置网关, 服务器模式由后端提供接口 */
+  if (location.protocol === "file:") {
+    document.write("<script src=\"core.js\"><\/script><script src=\"gateway.js\"><\/script>");
+  }
+</script>
 <title>流量统计 · 随身 WiFi</title>
 <link rel="stylesheet" href="/app.css">
 </head>
@@ -186,13 +192,7 @@ $('doQuota').addEventListener('click', async () => {
   $('doQuota').disabled = true;
   $('doQuota').textContent = '保存中…';
   try {
-    const r = await fetch('/api/traffic/quota', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ quotaGb: n }),
-    });
-    const j = await r.json().catch(() => ({ ok: false, error: '响应异常' }));
-    if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    const j = await Api.post('/api/traffic/quota', { quotaGb: n });
     toast(j.message || '已保存', true);
     closeModals();
     refresh();   // 立即拉取新数据
@@ -232,9 +232,7 @@ function renderPkg(d) {
 
 async function loadPkg(force) {
   try {
-    const r = await fetch('/api/remote-traffic' + (force ? '?refresh=1' : ''));
-    if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
-    renderPkg(await r.json());
+    renderPkg(await Api.get('/api/remote-traffic' + (force ? '?refresh=1' : '')));
   } catch (e) {
     $('pkgNote').textContent = '获取失败: ' + e.message;
   }

@@ -1,11 +1,13 @@
 # 随身 WiFi 仪表盘
 
-一个本地网页面板，实时查看随身 WiFi（LV01 / MF518A03 固件）的联网状态、电量、信号、
-网速、流量、连接设备等信息，并支持修改 WiFi 名称 / 密码、SIM 卡槽切换、频段锁定和
-流量套餐总量设置。纯 PHP **8.4+**（兼容最新 **8.5**，CI 双版本验证）实现，零第三方依赖，
-深色主题，PC / 平板 / 手机自适应，多页面按需加载。
+一个本地网页面板 + Android App，实时查看随身 WiFi（LV01 / MF518A03 固件）的联网状态、
+电量、信号、网速、流量、连接设备等信息，并支持修改 WiFi 名称 / 密码、SIM 卡槽切换、
+频段锁定和流量套餐总量设置。
 
-> 要求扩展: curl / SimpleXML / json / mbstring（见 composer.json）
+- **后端**: PHP 8.4+（兼容最新 8.5，CI 双版本验证）或 **Node.js**（`server.js`，零依赖，接口一致）
+- **前端**: 零第三方依赖，深色主题，PC / 平板 / 手机自适应，多页面按需加载
+- **APK**: WebView 壳 + 内置 JS 网关，手机**无需任何服务器**直连设备（见下）
+- 要求扩展 (PHP): curl / SimpleXML / json / mbstring（见 composer.json）
 
 ## 配置
 
@@ -19,6 +21,34 @@ WIFI_HOST=http://192.168.1.1 WIFI_USER=admin WIFI_PASS=你的设备密码 \
 # 方式二: 本地配置文件（复制模板后填写, config.local.php 已加入 .gitignore 不会被提交）
 cp config.local.php.example config.local.php
 PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8765 -t public server.php
+```
+
+## Node.js 版网关
+
+`server.js` 是 PHP 版的完整 Node 移植（接口/缓存/boot 注入一致，零依赖，需 Node 18+）：
+
+```bash
+WIFI_PASS=你的设备密码 PORT=8766 node server.js
+# 或 config.local.json: {"user":"admin","pass":"...","mgx_card":"..."}
+```
+
+## Android App (APK)
+
+`android/wifi-dashboard.apk`（45KB，debug 签名）——手机**无需任何服务器**，
+连接随身 WiFi 后直接使用：
+
+1. 下载 APK 安装（需允许未知来源）
+2. 首次打开点右上角 **⚙** 填设备密码（发卡平台设备号可选），保存在手机本地
+3. 所有功能与网页版一致：状态/网速/流量/设备/WiFi 管理/SIM 切换/频段锁定
+
+原理：页面与内置 JS 网关（`core.js` + `gateway.js`，与 server.js 共享同一套核心逻辑）
+打包进 APK assets，在 WebView 里直连设备完成 Digest 登录与数据解析。
+若个别固件拒绝 WebView 直连，可在 ⚙ 里填「服务器地址」（电脑上网关地址）切换为局域网模式。
+
+重新构建 APK（免 Gradle，需 Android SDK build-tools + Java）：
+
+```bash
+cd android && ./build-apk.sh   # 产物: android/wifi-dashboard.apk
 ```
 
 ## 使用
@@ -93,9 +123,12 @@ getXMLDocToString 一致，缺它设备会报 `CGI parse error`），并把设�
 
 ## 文件
 
-- `server.php` — 网关服务（登录 / 缓存 / 并行拉取 / 接口与页面路由）
+- `server.php` / `server.js` — 网关服务（PHP / Node 双实现，登录 / 缓存 / 并行拉取 / 接口与页面路由）
+- `public/core.js` — 共享核心：MD5（原厂同源实现）、Digest、XML 解析、数据组装
+- `public/gateway.js` — APK 内置浏览器网关（直连设备）
 - `public/index.html`、`public/traffic.html`、`public/devices.html` — 三个页面
-- `public/app.css`、`public/app.js` — 公共样式与脚本（无 CDN 依赖，离线可用）
+- `public/app.css`、`public/app.js` — 公共样式与脚本（含 API 适配层）
+- `android/` — WebView 壳工程与离线构建脚本（`./build-apk.sh`）
 - `启动仪表盘.command` — macOS 双击启动
 - `.mifi_session.json`、`.data_cache.json` — 运行时自动生成的会话与缓存文件
 

@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<script>
+  /* APK(file://) 模式: 同步预载内置网关, 服务器模式由后端提供接口 */
+  if (location.protocol === "file:") {
+    document.write("<script src=\"core.js\"><\/script><script src=\"gateway.js\"><\/script>");
+  }
+</script>
 <title>随身 WiFi</title>
 <link rel="stylesheet" href="/app.css">
 </head>
@@ -24,6 +30,7 @@
   </nav>
   <div class="top-right">
     <span class="pill" id="netPill"><span class="dot"></span><span id="netPillText">加载中</span></span>
+    <button class="btn" id="btnCfg" style="display:none" aria-label="设置">⚙</button>
     <a class="btn" href="http://192.168.1.1/" target="_blank">设备后台</a>
   </div>
 </header>
@@ -269,6 +276,41 @@
   </div>
 </div>
 
+<!-- 弹层：连接设置 (APK 模式) -->
+<div class="overlay" id="ovCfg">
+  <div class="modal">
+    <h4>连接设置</h4>
+    <div class="desc">手机需连接到随身 WiFi 的网络。设置保存在本机。</div>
+    <div class="field">
+      <label for="inCfgHost">设备地址</label>
+      <input id="inCfgHost" type="text" placeholder="http://192.168.1.1">
+    </div>
+    <div class="field">
+      <label for="inCfgUser">账号</label>
+      <input id="inCfgUser" type="text" placeholder="admin">
+    </div>
+    <div class="field">
+      <label for="inCfgPass">设备密码</label>
+      <div class="in-row">
+        <input id="inCfgPass" type="password" placeholder="设备后台密码">
+        <button class="btn eye" data-eye="inCfgPass" aria-label="显示或隐藏密码">👁</button>
+      </div>
+    </div>
+    <div class="field">
+      <label for="inCfgCard">发卡平台设备号（可选，用于套餐流量查询）</label>
+      <input id="inCfgCard" type="text" placeholder="如 SDY001046">
+    </div>
+    <div class="field">
+      <label for="inCfgServer">服务器地址（可选，直连失败时填电脑上网关地址）</label>
+      <input id="inCfgServer" type="text" placeholder="如 http://192.168.1.199:8765">
+    </div>
+    <div class="modal-btns">
+      <button class="btn" data-close>取消</button>
+      <button class="btn primary" id="doCfg">保存并重连</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script src="/app.js"></script>
@@ -429,14 +471,7 @@ $('btnToggle').addEventListener('click', () => {
 });
 
 async function postWifi(payload) {
-  const r = await fetch('/api/wifi', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  const j = await r.json().catch(() => ({ ok: false, error: '响应异常' }));
-  if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
-  return j;
+  return Api.post('/api/wifi', payload);
 }
 
 $('doSsid').addEventListener('click', async () => {
@@ -514,9 +549,7 @@ $('simEntry').addEventListener('click', async e => {
   $('inSimPw').value = '';
   openModal('ovSim');
   try {
-    const r = await fetch('/api/sim');
-    if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
-    sim = await r.json();
+    sim = await Api.get('/api/sim');
     $('simCur').textContent = sim.current >= 0 ? simSlotLabel(sim.current) : '未知';
     $('simPwField').style.display = sim.pwdRequired ? 'block' : 'none';
     renderSimChips();
@@ -536,13 +569,8 @@ $('doSim').addEventListener('click', async () => {
   $('doSim').disabled = true;
   $('doSim').textContent = '切换中…';
   try {
-    const r = await fetch('/api/sim', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slot: simPick, pw }),
-    });
-    const j = await r.json().catch(() => ({ ok: false, error: '响应异常' }));
-    if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    const j = await Api.post('/api/sim', { slot: simPick, pw });
+    if (!j.ok) throw new Error(j.error);
     toast(j.message || 'SIM 卡槽已切换', true);
     closeModals();
     $('simEntryDesc').textContent = `当前使用 ${simSlotLabel(simPick)}，点击切换卡槽`;
@@ -577,9 +605,7 @@ $('bandEntry').addEventListener('click', async e => {
   renderBandChips();
   openModal('ovBand');
   try {
-    const r = await fetch('/api/band');
-    if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
-    band = await r.json();
+    band = await Api.get('/api/band');
     bandSel = new Set(band.bands.filter(b => b.enabled).map(b => b.band));
     $('bandCur').textContent = band.current || '未知';
     renderBandChips();
@@ -599,13 +625,8 @@ $('doBand').addEventListener('click', async () => {
   $('doBand').disabled = true;
   $('doBand').textContent = '保存中…';
   try {
-    const r = await fetch('/api/band', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bands: [...bandSel] }),
-    });
-    const j = await r.json().catch(() => ({ ok: false, error: '响应异常' }));
-    if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    const j = await Api.post('/api/band', { bands: [...bandSel] });
+    if (!j.ok) throw new Error(j.error);
     toast(j.message || '频段设置已保存', true);
     closeModals();
   } catch (e2) { toast(e2.message, false); }
@@ -618,6 +639,29 @@ if (window.__LAN_IP__ && ['localhost', '127.0.0.1'].includes(location.hostname))
   const hint = $('lanHint');
   hint.textContent = `📱 手机访问: http://${window.__LAN_IP__}:8765（需连接同一 WiFi）`;
   hint.style.display = 'inline';
+}
+
+/* ---------- APK 模式连接设置 ---------- */
+if (location.protocol === 'file:') {
+  $('btnCfg').style.display = 'inline-flex';
+  $('btnCfg').addEventListener('click', () => {
+    $('inCfgHost').value = localStorage.getItem('mifi_host') || 'http://192.168.1.1';
+    $('inCfgUser').value = localStorage.getItem('mifi_user') || 'admin';
+    $('inCfgPass').value = localStorage.getItem('mifi_pass') || '';
+    $('inCfgCard').value = localStorage.getItem('mgx_card') || '';
+    $('inCfgServer').value = localStorage.getItem('mifi_server') || '';
+    openModal('ovCfg');
+  });
+  $('doCfg').addEventListener('click', () => {
+    if (!$('inCfgPass').value.trim() && !$('inCfgServer').value.trim()) { toast('请输入设备密码或服务器地址', false); return; }
+    localStorage.setItem('mifi_host', $('inCfgHost').value.trim() || 'http://192.168.1.1');
+    localStorage.setItem('mifi_user', $('inCfgUser').value.trim() || 'admin');
+    localStorage.setItem('mifi_pass', $('inCfgPass').value);
+    localStorage.setItem('mgx_card', $('inCfgCard').value.trim());
+    localStorage.setItem('mifi_server', $('inCfgServer').value.trim());
+    closeModals();
+    location.reload();
+  });
 }
 
 /* ---------- 数据加载: 注入的缓存数据先行渲染, 网速区随 5s 轮询, 其余区块 30s 降频 ---------- */

@@ -1,7 +1,39 @@
-/* 随身 WiFi 公共脚本（三页共用）: 工具函数、头部状态、轮询、弹窗、Toast */
+/* 随身 WiFi 公共脚本（三页共用）: 工具函数、API 适配层、头部状态、轮询、弹窗、Toast */
 'use strict';
 window.__errs = [];
 window.addEventListener('error', e => window.__errs.push(String(e.message)));
+
+/* ---------- API 适配层 ----------
+ * 服务器模式: fetch /api/* (server.php 或 server.js)
+ * APK 模式(file://): 默认走内置网关 MifiGateway 直连设备;
+ *   若在设置里填了 mifi_server, 则改走该局域网服务器 (直连被设备拒绝时的备用通道)
+ */
+const apiViaServer = () => {
+  const base = (localStorage.getItem('mifi_server') || '').replace(/\/+$/, '');
+  return {
+    async get(p) {
+      const r = await fetch(base + p);
+      if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
+      return r.json();
+    },
+    async post(p, b) {
+      const r = await fetch(base + p, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(b),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: '响应异常' }));
+      if (!r.ok || j.ok === false) throw new Error(j.error || ('HTTP ' + r.status));
+      return j;
+    },
+  };
+};
+const Api = (location.protocol === 'file:')
+  ? (localStorage.getItem('mifi_server') ? apiViaServer() : {
+    get: p => window.MifiGateway.get(p),
+    post: (p, b) => window.MifiGateway.post(p, b),
+  })
+  : apiViaServer();
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -85,9 +117,7 @@ function startPolling(url, onOk, intervalMs) {
     if (busy) return;   // 上一次未完成(设备慢)时跳过本轮, 避免排队
     busy = true;
     try {
-      const r = await fetch(url);
-      if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
-      onOk(await r.json());
+      onOk(await Api.get(url));
       hideErrorBanner();
     } catch (e) {
       showErrorBanner(e.message);

@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
+<script>
+  /* APK(file://) 模式: 同步预载内置网关, 服务器模式由后端提供接口 */
+  if (location.protocol === "file:") {
+    document.write("<script src=\"core.js\"><\/script><script src=\"gateway.js\"><\/script>");
+  }
+</script>
 <title>连接设备 · 随身 WiFi</title>
 <link rel="stylesheet" href="/app.css">
 </head>
