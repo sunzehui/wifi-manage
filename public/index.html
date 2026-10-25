@@ -163,6 +163,7 @@
   <footer>
     <span id="updatedAt">--</span>
     <span>网速每 5 秒刷新 · 其他信息每 30 秒刷新</span>
+    <span id="lanHint" style="display:none"></span>
   </footer>
 </main>
 
@@ -611,6 +612,13 @@ $('doBand').addEventListener('click', async () => {
   $('doBand').disabled = false;
   $('doBand').textContent = '保存';
 });
+
+/* 手机访问提示: 在电脑上用 localhost 打开时, 页脚显示手机的访问地址 */
+if (window.__LAN_IP__ && ['localhost', '127.0.0.1'].includes(location.hostname)) {
+  const hint = $('lanHint');
+  hint.textContent = `📱 手机访问: http://${window.__LAN_IP__}:8765（需连接同一 WiFi）`;
+  hint.style.display = 'inline';
+}
 
 /* ---------- 数据加载: 注入的缓存数据先行渲染, 网速区随 5s 轮询, 其余区块 30s 降频 ---------- */
 if (window.__BOOT__) {

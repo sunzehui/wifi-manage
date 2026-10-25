@@ -978,6 +978,23 @@ function jsonOut(array $payload, int $code = 200): bool
     return true;
 }
 
+/** 本机局域网 IP (用于提示手机访问地址) */
+function lanIp(): string
+{
+    static $ip = null;
+    if ($ip === null) {
+        $ip = '';
+        foreach (['en0', 'en1'] as $if) {
+            $out = trim((string) @shell_exec("ipconfig getifaddr {$if} 2>/dev/null"));
+            if ($out !== '' && filter_var($out, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+                $ip = $out;
+                break;
+            }
+        }
+    }
+    return $ip;
+}
+
 /** 输出页面 HTML; 命中较新缓存时注入 window.__BOOT__ 让首屏 0ms 出数据 (纯读缓存, 不触达设备) */
 function pageOut(string $name, ?callable $bootProvider): bool
 {
@@ -1000,6 +1017,11 @@ function pageOut(string $name, ?callable $bootProvider): bool
         } catch (Throwable) {
             // 注入失败不影响页面输出, 前端会自行请求
         }
+    }
+    $lan = lanIp();
+    if ($lan !== '') {
+        $html = str_replace('</head>',
+            '<script>window.__LAN_IP__=' . json_encode($lan) . ';</script></head>', $html);
     }
     header('Content-Type: text/html; charset=utf-8');
     header('Cache-Control: no-store');
