@@ -29,6 +29,7 @@ body {
   display: flex; align-items: center; gap: 12px;
 }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+a.brand { text-decoration: none; color: inherit; }
 .logo {
   width: 38px; height: 38px; border-radius: 10px; flex: none;
   background: #1e3a5f; color: var(--blue);
