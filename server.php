@@ -158,11 +158,17 @@ final class MifiSession
         return ['realm' => $realm[1], 'nonce' => $nonce[1], 'qop' => $qop[1] ?? 'auth'];
     }
 
+    /** @var int 登录失败退避截止时间戳 (防止高频登录触发设备保护锁定) */
+    private static int $loginBlockedUntil = 0;
+
     /** 登录握手: 取质询 -> 计算 response -> login.cgi 校验; nonce 留作后续数据请求 */
     public function login(): void
     {
         if (deviceConfig()['pass'] === '') {
             throw new RuntimeException('未配置设备密码: 请设置环境变量 WIFI_PASS, 或创建 config.local.php (内容见 README「配置」一节)');
+        }
+        if (time() < self::$loginBlockedUntil) {
+            throw new RuntimeException('设备暂时拒绝登录(疑似触发登录保护), ' . (self::$loginBlockedUntil - time()) . ' 秒后自动恢复');
         }
         [, $headers] = $this->httpGet('/login.cgi');
         $challenge = $this->parseChallenge($headers['WWW-Authenticate'] ?? '');
@@ -244,9 +250,11 @@ final class MifiSession
             }
             $pending = array_values(array_diff($pending, array_keys($ok)));
             if ($pending === []) {
+                self::$loginBlockedUntil = 0;
                 return $ok;
             }
             if ($attempt === 1) {
+                self::$loginBlockedUntil = time() + 30;
                 throw new RuntimeException('获取设备数据失败: ' . implode(',', $pending));
             }
             $this->login();   // nonce 过期 -> 重新握手

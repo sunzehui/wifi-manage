@@ -39,9 +39,14 @@
     return { body: await res.text(), wwwAuth: res.headers.get('www-authenticate') || '' };
   }
 
+  let loginBlockedUntil = 0;   // 登录失败指数退避: 防止高频登录触发设备保护锁定
   async function login() {
     const cfg = cfgsafe();
     if (!cfg.pass) throw new Error('未配置设备密码: 点击右上角 ⚙ 设置');
+    if (Date.now() < loginBlockedUntil) {
+      throw new Error('设备暂时拒绝登录(疑似触发登录保护), ' +
+        Math.ceil((loginBlockedUntil - Date.now()) / 1000) + ' 秒后自动恢复');
+    }
     const r1 = await httpGet(cfg.host + '/login.cgi');
     const ch = C.parseChallenge(r1.wwwAuth);
     if (!ch) throw new Error('设备未返回质询, 请确认手机已连接到随身 WiFi');
@@ -51,6 +56,11 @@
     session.nc = 1;
     await httpGet(cfg.host + C.loginUrl(cfg, ch));
   }
+  function noteLoginResult(ok) {
+    loginBackoff = ok ? 0 : Math.min((loginBackoff || 30000) * 2, 600000);
+    if (!ok) loginBlockedUntil = Date.now() + loginBackoff;
+  }
+  let loginBackoff = 0;
   function cfgsafe() { return cfg(); }
 
   function authHeader(method) {
@@ -65,8 +75,8 @@
     if (!session.nonce) await login();
     for (let attempt = 0; attempt < 2; attempt++) {
       const r = await httpGet(`${cfg().host}/xml_action.cgi?method=get&module=duster&file=${file}&_=${Date.now()}`, authHeader('GET'));
-      if (ok(r.body)) return r.body;
-      if (attempt === 1) throw new Error(`获取设备数据 ${file} 失败`);
+      if (ok(r.body)) { noteLoginResult(true); return r.body; }
+      if (attempt === 1) { noteLoginResult(false); throw new Error(`获取设备数据 ${file} 失败`); }
       await login();
     }
   }
@@ -82,13 +92,15 @@
       else failed.push(f);
     });
     if (failed.length) {
+      noteLoginResult(false);
       await login();
       for (const f of failed) {
         const r = await httpGet(`${cfg().host}/xml_action.cgi?method=get&module=duster&file=${f}&_=${Date.now()}`, authHeader('GET'));
-        if (!ok(r.body)) throw new Error(`获取设备数据 ${f} 失败`);
+        if (!ok(r.body)) { noteLoginResult(false); throw new Error(`获取设备数据 ${f} 失败`); }
         out[f] = r.body;
       }
     }
+    noteLoginResult(true);
     return out;
   }
 
@@ -102,8 +114,8 @@
         signal: AbortSignal.timeout(12000),
       });
       const body = await res.text();
-      if (!body.includes('UNAUTHORIZED') && !body.includes('Error')) return body;
-      if (attempt === 1) throw new Error('设备拒绝了设置请求');
+      if (!body.includes('UNAUTHORIZED') && !body.includes('Error')) { noteLoginResult(true); return body; }
+      if (attempt === 1) { noteLoginResult(false); throw new Error('设备拒绝了设置请求'); }
       await login();
     }
   }
