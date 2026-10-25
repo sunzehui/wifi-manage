@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: curl, simplexml, json, mbstring
+
+      - name: 语法检查
+        run: php -l server.php && php -l config.local.php.example
+
+      - name: 启动烟雾测试
+        run: |
+          PHP_CLI_SERVER_WORKERS=2 php -S 127.0.0.1:8765 -t public server.php &
+          sleep 2
+          curl -sf http://127.0.0.1:8765/ | grep -q '随身 WiFi'
+          curl -sf http://127.0.0.1:8765/traffic | grep -q '流量统计'
+          curl -sf http://127.0.0.1:8765/devices | grep -q '连接设备'
+          curl -sf http://127.0.0.1:8765/app.css > /dev/null
+          curl -sf http://127.0.0.1:8765/app.js  > /dev/null
+          echo "所有页面与静态资源 OK"

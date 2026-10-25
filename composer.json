@@ -1,0 +1,16 @@
+{
+    "name": "sunzehui/wifi-manage",
+    "description": "随身 WiFi 仪表盘: 本地网关 + 多页面面板 (PHP 零依赖, 兼容 8.4 / 8.5)",
+    "type": "project",
+    "license": "MIT",
+    "require": {
+        "php": "^8.4",
+        "ext-curl": "*",
+        "ext-simplexml": "*",
+        "ext-json": "*",
+        "ext-mbstring": "*"
+    },
+    "config": {
+        "platform-check": false
+    }
+}

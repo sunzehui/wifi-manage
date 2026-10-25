@@ -4,6 +4,11 @@ declare(strict_types=1);
 
 date_default_timezone_set('Asia/Shanghai');
 
+if (PHP_VERSION_ID < 80400) {
+    http_response_code(500);
+    exit('需要 PHP >= 8.4，当前为 ' . PHP_VERSION);
+}
+
 /**
  * 随身 WiFi 后台仪表盘 — 本地网关服务 (PHP 8.4)
  *

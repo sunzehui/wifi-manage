@@ -2,7 +2,10 @@
 
 一个本地网页面板，实时查看随身 WiFi（LV01 / MF518A03 固件）的联网状态、电量、信号、
 网速、流量、连接设备等信息，并支持修改 WiFi 名称 / 密码、SIM 卡槽切换、频段锁定和
-流量套餐总量设置。纯 PHP 8.4 实现，零第三方依赖，深色主题，PC / 平板 / 手机自适应，多页面按需加载。
+流量套餐总量设置。纯 PHP **8.4+**（兼容最新 **8.5**，CI 双版本验证）实现，零第三方依赖，
+深色主题，PC / 平板 / 手机自适应，多页面按需加载。
+
+> 要求扩展: curl / SimpleXML / json / mbstring（见 composer.json）
 
 ## 配置
 
@@ -13,15 +16,8 @@
 WIFI_HOST=http://192.168.1.1 WIFI_USER=admin WIFI_PASS=你的设备密码 \
   PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8765 -t public server.php
 
-# 方式二: 本地配置文件（已加入 .gitignore，不会被提交）
-cat > config.local.php <<'EOF'
-<?php
-return [
-    'user'     => 'admin',
-    'pass'     => '你的设备密码',
-    'mgx_card' => '你的发卡平台设备号',   // 可选, 用于「套餐流量」查询
-];
-EOF
+# 方式二: 本地配置文件（复制模板后填写, config.local.php 已加入 .gitignore 不会被提交）
+cp config.local.php.example config.local.php
 PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8765 -t public server.php
 ```
 
