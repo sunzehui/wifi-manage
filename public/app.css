@@ -1,0 +1,309 @@
+/* ============ 随身 WiFi 公共样式（三页共用） ============ */
+:root {
+  --bg: #0d1322;          /* 深色背景，非纯黑 */
+  --card: #151d33;        /* 卡片底色 */
+  --card2: #1b2440;       /* 卡片内嵌块 */
+  --line: #28324e;        /* 边框 */
+  --text: #eaf0ff;        /* 主文字，高对比 */
+  --muted: #93a0c4;       /* 辅助文字，低对比 */
+  --good: #34d399;        /* 正常 / 在线 */
+  --warn: #fbbf24;        /* 需要注意 */
+  --bad:  #f87171;        /* 异常 / 危险 */
+  --blue: #60a5fa;        /* 主操作 / 辅助信息 */
+  --radius: 14px;
+  --gap: 14px;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  background: var(--bg); color: var(--text);
+  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px; line-height: 1.5;
+  min-height: 100vh; overflow-x: hidden;
+}
+.page { max-width: 1240px; margin: 0 auto; padding: 16px clamp(12px, 2.5vw, 28px) 48px; }
+
+/* ============ 顶部栏 ============ */
+.topbar {
+  max-width: 1240px; margin: 0 auto; padding: 14px clamp(12px, 2.5vw, 28px);
+  display: flex; align-items: center; gap: 12px;
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.logo {
+  width: 38px; height: 38px; border-radius: 10px; flex: none;
+  background: #1e3a5f; color: var(--blue);
+  display: flex; align-items: center; justify-content: center; font-size: 19px;
+}
+.brand h1 { font-size: 17px; font-weight: 650; line-height: 1.2; }
+.brand .sub { font-size: 12px; color: var(--muted); line-height: 1.2; }
+.nav { display: flex; gap: 4px; margin-left: 18px; }
+.nav a {
+  color: var(--muted); text-decoration: none; font-size: 14px;
+  padding: 8px 12px; border-radius: 8px; white-space: nowrap;
+}
+.nav a:hover { color: var(--text); background: var(--card2); }
+.nav a.on { color: var(--blue); background: rgba(96,165,250,.1); font-weight: 600; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 10px; flex: none; }
+
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; padding: 5px 12px; border-radius: 999px;
+  border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
+}
+.pill .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.pill.good { color: var(--good); border-color: rgba(52,211,153,.35); }
+.pill.good .dot { background: var(--good); }
+.pill.bad { color: var(--bad); border-color: rgba(248,113,113,.35); }
+.pill.bad .dot { background: var(--bad); }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 38px; padding: 8px 16px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card2); color: var(--text);
+  font-size: 14px; font-family: inherit; text-decoration: none; transition: border-color .15s, background .15s;
+}
+.btn:hover { border-color: var(--blue); }
+.btn.primary { background: var(--blue); border-color: var(--blue); color: #0b1220; font-weight: 600; }
+.btn.primary:hover { background: #7cb6fb; }
+.btn.danger { color: var(--bad); border-color: rgba(248,113,113,.4); }
+.btn.danger:hover { background: rgba(248,113,113,.08); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ============ 离线横幅 ============ */
+.banner {
+  display: none; margin: 4px 0 14px; padding: 12px 14px; border-radius: var(--radius);
+  background: rgba(248,113,113,.1); border: 1px solid rgba(248,113,113,.35);
+  color: #ffc2c2; font-size: 14px;
+}
+.banner.show { display: block; }
+
+/* ============ 网格布局 ============ */
+.grid { display: grid; gap: var(--gap); margin-bottom: var(--gap); }
+.hero-grid { grid-template-columns: 1fr; }
+.two-grid { grid-template-columns: 1fr; }
+@media (min-width: 768px) {
+  .hero-grid { grid-template-columns: repeat(2, 1fr); }
+  .two-grid { grid-template-columns: repeat(2, 1fr); }
+  .nav { display: flex; }
+}
+@media (max-width: 767px) { .nav { display: none; } }
+@media (min-width: 1024px) {
+  .hero-grid { grid-template-columns: 1.15fr 1.25fr 1fr; }
+}
+
+/* ============ 卡片 ============ */
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 18px 20px; min-width: 0;
+}
+.card-title { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 14px; }
+
+/* ============ 设备状态卡 ============ */
+.state-line { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.state-line .big { font-size: 21px; font-weight: 700; }
+.nettype {
+  margin-left: auto; font-size: 12px; color: var(--blue);
+  border: 1px solid rgba(96,165,250,.4); border-radius: 8px; padding: 2px 9px; white-space: nowrap;
+}
+.operator { color: var(--muted); font-size: 14px; margin-bottom: 14px; }
+.signal-row { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 16px; }
+.bars { display: flex; align-items: flex-end; gap: 4px; height: 34px; flex: none; }
+.bars i { width: 8px; border-radius: 2px 2px 0 0; background: var(--line); display: block; }
+.bars i:nth-child(1) { height: 25%; } .bars i:nth-child(2) { height: 50%; }
+.bars i:nth-child(3) { height: 75%; } .bars i:nth-child(4) { height: 100%; }
+.bars i.on { background: var(--good); }
+.bars.warn i.on { background: var(--warn); }
+.bars.bad i.on { background: var(--bad); }
+.signal-meta .s-label { font-size: 15px; font-weight: 600; }
+.signal-meta .s-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.divider { border: none; border-top: 1px solid var(--line); margin: 14px 0; }
+
+.battery-row { display: flex; align-items: center; gap: 16px; }
+.battery-row .pct { font-size: 34px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.battery-row .pct small { font-size: 15px; color: var(--muted); font-weight: 400; }
+.battery-state { font-size: 13px; color: var(--muted); margin-top: 4px; display: flex; align-items: center; gap: 5px; }
+.batt {
+  width: 64px; height: 30px; border: 2px solid #6b7899; border-radius: 6px;
+  position: relative; padding: 3px; flex: none;
+}
+.batt::after {
+  content: ""; position: absolute; right: -6px; top: 8px; width: 4px; height: 10px;
+  background: #6b7899; border-radius: 0 2px 2px 0;
+}
+.batt-fill { height: 100%; border-radius: 3px; background: var(--good); transition: width .5s; }
+.batt-fill.warn { background: var(--warn); } .batt-fill.bad { background: var(--bad); }
+
+/* ============ 网速卡 ============ */
+.speed-row { display: flex; gap: 30px; margin-bottom: 12px; }
+.speed-item .k { font-size: 12px; color: var(--muted); }
+.speed-item .v { font-size: 27px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.speed-item.down .v { color: var(--good); }
+.speed-item.up .v { color: var(--blue); }
+canvas.rate-chart { width: 100%; height: 86px; display: block; }
+.chart-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+/* ============ 键值行 ============ */
+.kv { display: grid; grid-template-columns: auto 1fr; row-gap: 9px; column-gap: 14px; font-size: 14px; margin-top: 14px; }
+.kv .k { color: var(--muted); white-space: nowrap; }
+.kv .v { text-align: right; word-break: break-all; font-variant-numeric: tabular-nums; min-width: 0; }
+
+/* ============ 入口卡片 ============ */
+.entry-card { display: flex; align-items: center; gap: 14px; }
+.entry-ic {
+  width: 46px; height: 46px; border-radius: 12px; flex: none;
+  background: var(--card2); display: flex; align-items: center; justify-content: center; font-size: 22px;
+}
+.entry-main { flex: 1; min-width: 0; }
+.entry-main .t { font-size: 16px; font-weight: 650; }
+.entry-main .d { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.entry-arrow { color: var(--muted); font-size: 20px; flex: none; }
+a.entry-card { text-decoration: none; color: inherit; }
+a.entry-card:hover .entry-arrow { color: var(--blue); transform: translateX(2px); }
+.entry-arrow { transition: color .15s, transform .15s; }
+.usage-big { font-size: 32px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.usage-big small { font-size: 15px; color: var(--muted); font-weight: 400; margin-left: 2px; }
+.usage-note { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+/* ============ 流量进度条 ============ */
+.bar {
+  height: 10px; border-radius: 999px; background: var(--card2);
+  border: 1px solid var(--line); overflow: hidden; margin: 14px 0 4px;
+}
+.bar-fill { height: 100%; width: 0; background: var(--blue); border-radius: 999px; transition: width .5s; }
+.bar-fill.warn { background: var(--warn); }
+.bar-fill.bad { background: var(--bad); }
+
+/* ============ WiFi 管理 ============ */
+.wifi-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.wifi-name { font-size: 19px; font-weight: 650; word-break: break-all; }
+.wifi-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+
+/* ============ 折叠面板 ============ */
+.fold-btn {
+  width: 100%; min-height: 44px; margin-top: 16px;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: none; border: none; border-top: 1px solid var(--line);
+  color: var(--blue); font-size: 14px; cursor: pointer; font-family: inherit;
+}
+.fold-btn .chev { transition: transform .2s; }
+.fold-btn.open .chev { transform: rotate(180deg); }
+.fold-body { display: none; }
+.fold-body.open { display: block; }
+.fold-body .kv { margin-top: 12px; }
+
+/* ============ 连接设备 ============ */
+.cli-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px; }
+.cli-head .card-title { margin: 0; }
+.cli-count { font-size: 13px; color: var(--muted); margin-left: auto; white-space: nowrap; }
+.cli-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+.search {
+  flex: 1 1 180px; min-width: 0; min-height: 40px;
+  background: var(--card2); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--text); font-size: 16px; font-family: inherit; padding: 8px 12px;
+}
+.search:focus { outline: none; border-color: var(--blue); }
+.chips { display: flex; gap: 6px; }
+.chip {
+  min-height: 40px; padding: 8px 15px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--card2); color: var(--muted); font-size: 13px; font-family: inherit;
+}
+.chip.on { color: #0b1220; background: var(--blue); border-color: var(--blue); font-weight: 600; }
+
+.table-wrap { overflow-x: auto; margin: 0 -6px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 680px; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 9px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+td { padding: 11px 10px; border-bottom: 1px solid rgba(40,50,78,.5); font-variant-numeric: tabular-nums; vertical-align: middle; }
+tbody tr:hover { background: rgba(96,165,250,.05); }
+tbody tr:last-child td { border-bottom: none; }
+.dev-name { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.dev-name .ic { font-size: 17px; flex: none; }
+.dev-name .nm { font-weight: 600; word-break: break-all; }
+.st { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; white-space: nowrap; }
+.st::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--muted); flex: none; }
+.st.on { color: var(--good); } .st.on::before { background: var(--good); }
+.st.off { color: var(--muted); }
+.link-btn { background: none; border: none; color: var(--blue); font-size: 13px; cursor: pointer; font-family: inherit; padding: 8px; min-height: 44px; }
+.empty { color: var(--muted); font-size: 14px; text-align: center; padding: 28px 0; }
+
+.cli-cards { display: none; }
+.cli-card {
+  border: 1px solid var(--line); border-radius: 12px; padding: 13px 14px; margin-bottom: 10px;
+  background: var(--card2);
+}
+.cli-card .row1 { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.cli-card .ic { font-size: 20px; flex: none; }
+.cli-card .nm { font-weight: 650; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cli-card .ip { font-size: 12px; color: var(--muted); }
+.cli-card .row2 { display: flex; gap: 16px; font-size: 13px; margin-top: 9px; color: var(--muted); }
+.cli-card .row2 b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.cli-card .exp {
+  background: none; border: none; color: var(--blue); font-size: 13px;
+  font-family: inherit; cursor: pointer; margin-left: auto; min-height: 44px; min-width: 44px; flex: none;
+}
+.cli-card .detail { display: none; margin-top: 4px; }
+.cli-card.open .detail { display: block; }
+.cli-card .detail .kv { grid-template-columns: auto 1fr; font-size: 13px; margin-top: 6px; }
+
+/* ============ 弹层 ============ */
+.overlay {
+  position: fixed; inset: 0; background: rgba(4,8,18,.66);
+  display: none; align-items: center; justify-content: center; z-index: 50; padding: 20px;
+}
+.overlay.show { display: flex; }
+.modal {
+  width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 16px 16px 0 0; padding: 20px 20px calc(20px + env(safe-area-inset-bottom));
+  max-height: 86vh; overflow-y: auto;
+}
+.modal h4 { font-size: 16px; margin-bottom: 6px; }
+.modal .desc { font-size: 13px; color: var(--muted); margin-bottom: 14px; word-break: break-all; }
+.field { margin-bottom: 12px; }
+.field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.field .in-row { display: flex; gap: 8px; }
+.field input {
+  flex: 1; min-width: 0; min-height: 46px; font-size: 16px; font-family: inherit;
+  background: var(--card2); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--text); padding: 10px 12px;
+}
+.field input:focus { outline: none; border-color: var(--blue); }
+.eye { min-height: 46px; min-width: 46px; flex: none; font-size: 17px; }
+.field .err { font-size: 12px; color: var(--bad); margin-top: 5px; display: none; }
+.modal-btns { display: flex; gap: 10px; margin-top: 16px; }
+.modal-btns .btn { flex: 1; min-height: 46px; }
+@media (max-width: 767px) {
+  .overlay { align-items: flex-end; padding: 0; }   /* 移动端底部弹层 */
+  .modal { max-width: 100%; }
+}
+@media (min-width: 768px) {
+  .modal { border-radius: 16px; padding-bottom: 20px; }
+}
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed; left: 50%; bottom: 30px; transform: translate(-50%, 20px);
+  background: #20294a; border: 1px solid var(--line); color: var(--text);
+  padding: 11px 18px; border-radius: 10px; font-size: 14px; opacity: 0;
+  pointer-events: none; transition: opacity .25s, transform .25s; z-index: 99;
+  max-width: min(86vw, 420px); text-align: center;
+}
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.ok { border-color: rgba(52,211,153,.5); }
+.toast.err { border-color: rgba(248,113,113,.5); }
+
+footer { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 12px; margin-top: 4px; }
+
+/* ============ 移动端（320-767）单列适配 ============ */
+@media (max-width: 767px) {
+  .topbar { padding-top: 10px; padding-bottom: 10px; }
+  .brand .sub { display: none; }
+  .card { padding: 15px 16px; }
+  .speed-row { gap: 20px; }
+  .wifi-actions { grid-template-columns: 1fr; }
+  .wifi-actions .btn { min-height: 46px; }
+  .table-wrap { display: none; }
+  .cli-cards { display: block; }
+  .cli-count { margin-left: 0; width: 100%; }
+  .btn { min-height: 44px; }
+  .pill { padding: 7px 12px; }
+}

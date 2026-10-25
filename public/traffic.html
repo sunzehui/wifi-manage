@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>流量统计 · 随身 WiFi</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">📶</div>
+    <div>
+      <h1>随身 WiFi</h1>
+      <div class="sub">流量统计</div>
+    </div>
+  </div>
+  <nav class="nav">
+    <a href="/">首页</a>
+    <a class="on" href="/traffic">流量</a>
+    <a href="/devices">设备</a>
+  </nav>
+  <div class="top-right">
+    <span class="pill" id="netPill"><span class="dot"></span><span id="netPillText">加载中</span></span>
+    <a class="btn" href="http://192.168.1.1/" target="_blank">设备后台</a>
+  </div>
+</header>
+
+<main class="page">
+  <div class="banner" id="banner"></div>
+
+  <div class="grid two-grid">
+    <div class="card">
+      <div class="card-title">本月流量</div>
+      <div class="usage-big"><span id="monthUsed">--</span><small id="monthUsedUnit"></small></div>
+      <div class="usage-note">本月已使用</div>
+
+      <!-- 套餐进度（设置了总量后显示） -->
+      <div id="quotaBox" style="display:none">
+        <div class="bar"><div class="bar-fill" id="quotaBar"></div></div>
+        <div class="kv" style="margin-top:10px">
+          <span class="k">套餐总量</span><span class="v" id="quotaTotal">--</span>
+          <span class="k">剩余流量</span><span class="v" id="quotaLeft">--</span>
+          <span class="k">已用占比</span><span class="v" id="quotaPct">--</span>
+        </div>
+      </div>
+
+      <div class="kv">
+        <span class="k">累计已用</span><span class="v" id="totalUsed">--</span>
+        <span class="k">当前连接时长</span><span class="v" id="curConn">--</span>
+        <span class="k">累计在线</span><span class="v" id="totalConn">--</span>
+      </div>
+      <div class="usage-note" id="usageNote">设备未设置流量套餐总量，仅展示实际已用流量。</div>
+      <div class="wifi-actions" style="grid-template-columns:repeat(3,1fr)">
+        <button class="btn" id="btnQuota">设置总量</button>
+        <button class="btn" id="btnRefresh">刷新数据</button>
+        <a class="btn" href="/">返回首页</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">说明</div>
+      <div class="kv" style="margin-top:0">
+        <span class="k">统计来源</span><span class="v">设备原生流量统计</span>
+        <span class="k">刷新频率</span><span class="v">每 15 秒</span>
+      </div>
+      <div class="usage-note" style="margin-top:12px">
+        流量总量会保存到设备中（与设备后台「流量管理」同一设置）。剩余流量 = 总量 −
+        设备统计的本月已用。填 0 可清除总量设置（不限量）。想了解每台设备分别用了多少流量，
+        请前往「设备」页面查看。
+      </div>
+      <div class="wifi-actions" style="grid-template-columns:1fr">
+        <a class="btn" href="/devices">查看设备流量</a>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <span id="updatedAt">--</span>
+    <span>不自动轮询，点击「刷新数据」更新</span>
+  </footer>
+</main>
+
+<!-- 弹层：设置流量总量 -->
+<div class="overlay" id="ovQuota">
+  <div class="modal">
+    <h4>设置流量总量</h4>
+    <div class="desc">输入本月套餐总量（GB）。剩余流量按「总量 − 设备已用」实时计算。填 0 表示清除设置（不限量）。</div>
+    <div class="field">
+      <label for="inQuota">总量 (GB)</label>
+      <input id="inQuota" type="number" min="0" max="100000" step="0.1" inputmode="decimal" placeholder="如 150">
+      <div class="err" id="inQuotaErr" style="display:none;margin-top:5px;font-size:12px;color:var(--bad)"></div>
+    </div>
+    <div class="modal-btns">
+      <button class="btn" data-close>取消</button>
+      <button class="btn primary" id="doQuota">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/app.js"></script>
+<script>
+let traffic = null;
+
+function renderQuota(d) {
+  const q = d.quotaBytes || 0;
+  const box = $('quotaBox');
+  if (q > 0) {
+    const used = d.monthUsedBytes;
+    const left = q - used;
+    const pct = used / q * 100;
+    box.style.display = 'block';
+    $('quotaTotal').textContent = (q / (1 << 30)).toFixed(q % (1 << 30) ? 2 : 0) + ' GB';
+    $('quotaLeft').textContent = left >= 0 ? fmtBytes(left) : '已超出 ' + fmtBytes(-left);
+    $('quotaLeft').style.color = left < 0 ? 'var(--bad)' : (pct >= 80 ? 'var(--warn)' : 'var(--text)');
+    $('quotaPct').textContent = pct.toFixed(1) + ' %';
+    const bar = $('quotaBar');
+    bar.style.width = Math.min(100, pct) + '%';
+    bar.className = 'bar-fill' + (pct >= 100 ? ' bad' : pct >= 80 ? ' warn' : '');
+    $('usageNote').textContent = '套餐总量已设置，剩余流量按设备统计实时计算。';
+  } else {
+    box.style.display = 'none';
+    $('usageNote').textContent = '设备未设置流量套餐总量，仅展示实际已用流量。';
+  }
+}
+
+function render(d) {
+  traffic = d;
+  renderNetPill('connected');   // 能取到数据即代表设备可达; 联网状态以首页为准
+  $('monthUsed').textContent = (d.monthUsedBytes / (1 << 30)).toFixed(2);
+  $('monthUsedUnit').textContent = ' GB';
+  $('totalUsed').textContent = fmtBytes(d.totalUsedBytes);
+  $('curConn').textContent = d.curConnTime || '--';
+  $('totalConn').textContent = d.totalConnTime || '--';
+  renderQuota(d);
+  $('updatedAt').textContent = '更新于 ' + new Date(d.time).toLocaleTimeString('zh-CN');
+}
+
+/* ---------- 设置流量总量 / 手动刷新 ---------- */
+bindModals();
+const refresh = startPolling('/api/traffic', render, 0);   // 只加载一次, 不轮询
+$('btnRefresh').addEventListener('click', () => {
+  $('btnRefresh').disabled = true;
+  refresh().finally(() => { $('btnRefresh').disabled = false; });
+});
+
+$('btnQuota').addEventListener('click', () => {
+  const gb = traffic?.quotaBytes ? (traffic.quotaBytes / (1 << 30)) : '';
+  $('inQuota').value = gb === '' ? '' : Math.round(gb * 10) / 10;
+  $('inQuotaErr').style.display = 'none';
+  openModal('ovQuota');
+});
+
+$('doQuota').addEventListener('click', async () => {
+  const v = $('inQuota').value.trim();
+  const err = $('inQuotaErr');
+  const n = parseFloat(v);
+  if (v === '' || isNaN(n) || n < 0 || n > 100000) {
+    err.textContent = '请输入 0 - 100000 之间的数值（GB）';
+    err.style.display = 'block';
+    return;
+  }
+  err.style.display = 'none';
+  $('doQuota').disabled = true;
+  $('doQuota').textContent = '保存中…';
+  try {
+    const r = await fetch('/api/traffic/quota', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ quotaGb: n }),
+    });
+    const j = await r.json().catch(() => ({ ok: false, error: '响应异常' }));
+    if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    toast(j.message || '已保存', true);
+    closeModals();
+    refresh();   // 立即拉取新数据
+  } catch (e) { toast(e.message, false); }
+  $('doQuota').disabled = false;
+  $('doQuota').textContent = '保存';
+});
+
+if (window.__BOOT__) { render(window.__BOOT__); delete window.__BOOT__; }
+</script>
+</body>
+</html>

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>连接设备 · 随身 WiFi</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">📶</div>
+    <div>
+      <h1>随身 WiFi</h1>
+      <div class="sub">连接设备</div>
+    </div>
+  </div>
+  <nav class="nav">
+    <a href="/">首页</a>
+    <a href="/traffic">流量</a>
+    <a class="on" href="/devices">设备</a>
+  </nav>
+  <div class="top-right">
+    <span class="pill" id="netPill"><span class="dot"></span><span id="netPillText">加载中</span></span>
+    <a class="btn" href="http://192.168.1.1/" target="_blank">设备后台</a>
+  </div>
+</header>
+
+<main class="page">
+  <div class="banner" id="banner"></div>
+
+  <section class="card">
+    <div class="cli-head">
+      <div class="card-title">连接设备</div>
+      <div class="cli-count" id="cliCount">--</div>
+    </div>
+    <div class="cli-tools">
+      <input class="search" id="search" type="search" placeholder="搜索名称 / MAC / IP" autocomplete="off">
+      <div class="chips">
+        <button class="chip on" data-f="all">全部</button>
+        <button class="chip" data-f="on">在线</button>
+        <button class="chip" data-f="off">离线</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>设备</th><th>类型</th><th>IP 地址</th><th>状态</th>
+          <th>下载流量</th><th>上传流量</th><th>接入时间</th><th>操作</th>
+        </tr></thead>
+        <tbody id="cliBody"><tr><td colspan="8" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="cli-cards" id="cliCards"><div class="empty">加载中…</div></div>
+  </section>
+
+  <div class="wifi-actions" style="grid-template-columns:repeat(3,1fr);max-width:520px">
+    <button class="btn" id="btnRefresh">刷新数据</button>
+    <a class="btn" href="/">返回首页</a>
+    <a class="btn" href="/traffic">查看总流量</a>
+  </div>
+
+  <footer>
+    <span id="updatedAt">--</span>
+    <span>不自动轮询，点击「刷新数据」更新</span>
+  </footer>
+</main>
+
+<!-- 弹层：设备详情 -->
+<div class="overlay" id="ovClient">
+  <div class="modal">
+    <h4 id="cName">设备详情</h4>
+    <div class="kv" style="margin-top:10px" id="cKv"></div>
+    <div class="modal-btns"><button class="btn" data-close>关闭</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/app.js"></script>
+<script>
+let data = null;
+const filter = { mode: 'all', query: '' };
+
+function render(d) {
+  data = d;
+  renderNetPill(d.onlineCount > 0 ? 'connected' : 'disconnected');
+  renderClients();
+  $('updatedAt').textContent = '更新于 ' + new Date(d.time).toLocaleTimeString('zh-CN');
+}
+
+function filteredClients() {
+  if (!data) return [];
+  const q = filter.query.trim().toLowerCase();
+  return data.clients.filter(c => {
+    if (filter.mode === 'on' && !c.connected) return false;
+    if (filter.mode === 'off' && c.connected) return false;
+    if (q && !(`${c.name} ${c.mac} ${c.ip}`.toLowerCase().includes(q))) return false;
+    return true;
+  });
+}
+
+function renderClients() {
+  if (!data) return;
+  const list = filteredClients();
+  $('cliCount').textContent = `在线 ${data.onlineCount} · 共 ${data.total} 台`;
+
+  /* PC 表格 */
+  const body = $('cliBody');
+  if (!list.length) {
+    body.innerHTML = '<tr><td colspan="8" class="empty">没有符合条件的设备</td></tr>';
+  } else {
+    body.innerHTML = list.map((c, i) => {
+      const [tp, ic] = deviceType(c.name);
+      return `<tr>
+        <td><div class="dev-name"><span class="ic">${ic}</span><div><div class="nm">${esc(c.name)}</div></div></div></td>
+        <td style="color:var(--muted)">${tp}</td>
+        <td>${esc(c.ip)}</td>
+        <td><span class="st ${c.connected ? 'on' : 'off'}">${c.connected ? '在线' : '离线'}</span></td>
+        <td>${fmtBytes(c.rxBytes)}</td>
+        <td>${fmtBytes(c.txBytes)}</td>
+        <td>${esc(c.since || '--')}</td>
+        <td><button class="link-btn" data-cli="${i}">详情</button></td>
+      </tr>`;
+    }).join('');
+  }
+
+  /* 移动端卡片列表 */
+  const cards = $('cliCards');
+  if (!list.length) {
+    cards.innerHTML = '<div class="empty">没有符合条件的设备</div>';
+  } else {
+    cards.innerHTML = list.map((c, i) => {
+      const [tp, ic] = deviceType(c.name);
+      return `<div class="cli-card" data-cc="${i}">
+        <div class="row1">
+          <span class="ic">${ic}</span>
+          <div style="min-width:0;flex:1">
+            <div class="nm">${esc(c.name)}</div>
+            <div class="ip">${esc(c.ip)} · ${tp}</div>
+          </div>
+          <span class="st ${c.connected ? 'on' : 'off'}">${c.connected ? '在线' : '离线'}</span>
+          <button class="exp" aria-label="展开详情">⌄</button>
+        </div>
+        <div class="row2">
+          <span>↓ <b>${fmtBytes(c.rxBytes)}</b></span>
+          <span>↑ <b>${fmtBytes(c.txBytes)}</b></span>
+        </div>
+        <div class="detail">
+          <hr class="divider" style="margin:10px 0">
+          <div class="kv">
+            <span class="k">MAC 地址</span><span class="v">${c.mac}</span>
+            <span class="k">接入时间</span><span class="v">${esc(c.since || '--')}</span>
+            <span class="k">本月下载</span><span class="v">${fmtBytes(c.rxMonthly)}</span>
+            <span class="k">本月上传</span><span class="v">${fmtBytes(c.txMonthly)}</span>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+}
+
+function showClient(idx) {
+  const c = filteredClients()[idx];
+  if (!c) return;
+  $('cName').textContent = c.name + (c.connected ? '（在线）' : '（离线）');
+  const [tp] = deviceType(c.name);
+  $('cKv').innerHTML = `
+    <span class="k">设备类型</span><span class="v">${tp}</span>
+    <span class="k">IP 地址</span><span class="v">${esc(c.ip)}</span>
+    <span class="k">MAC 地址</span><span class="v">${c.mac}</span>
+    <span class="k">累计下载</span><span class="v">${fmtBytes(c.rxBytes)}</span>
+    <span class="k">累计上传</span><span class="v">${fmtBytes(c.txBytes)}</span>
+    <span class="k">本月下载</span><span class="v">${fmtBytes(c.rxMonthly)}</span>
+    <span class="k">本月上传</span><span class="v">${fmtBytes(c.txMonthly)}</span>
+    <span class="k">接入时间</span><span class="v">${esc(c.since || '--')}</span>`;
+  openModal('ovClient');
+}
+
+bindModals();
+document.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
+  document.querySelectorAll('.chip').forEach(x => x.classList.remove('on'));
+  c.classList.add('on');
+  filter.mode = c.dataset.f;
+  renderClients();
+}));
+$('search').addEventListener('input', e => { filter.query = e.target.value; renderClients(); });
+$('cliBody').addEventListener('click', e => {
+  const b = e.target.closest('[data-cli]');
+  if (b) showClient(+b.dataset.cli);
+});
+$('cliCards').addEventListener('click', e => {
+  const exp = e.target.closest('.exp');
+  if (exp) { exp.closest('.cli-card').classList.toggle('open'); return; }
+  const card = e.target.closest('[data-cc]');
+  if (card) showClient(+card.dataset.cc);
+});
+
+if (window.__BOOT__) { render(window.__BOOT__); delete window.__BOOT__; }
+const refresh = startPolling('/api/devices', render, 0);   // 只加载一次, 不轮询
+$('btnRefresh').addEventListener('click', () => {
+  $('btnRefresh').disabled = true;
+  refresh().finally(() => { $('btnRefresh').disabled = false; });
+});
+</script>
+</body>
+</html>
