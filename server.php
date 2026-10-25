@@ -41,6 +41,8 @@ function deviceConfig(): array
             'host' => getenv('WIFI_HOST') ?: 'http://192.168.1.1',
             'user' => getenv('WIFI_USER') ?: ($local['user'] ?? 'admin'),
             'pass' => getenv('WIFI_PASS') ?: ($local['pass'] ?? ''),
+            // 发卡平台的设备号(总流量查询), 见 README
+            'mgx_card' => getenv('WIFI_MGX_CARD') ?: ($local['mgx_card'] ?? ''),
         ];
     }
     return $cfg;
@@ -856,6 +858,110 @@ function quotaAction(array $in): array
         : '流量总量已设置为 ' . rtrim(rtrim(number_format((float) $gb, 2), '0'), '.') . ' GB'];
 }
 
+/* ===================== 套餐总流量查询 (迈高讯发卡平台, 手动刷新不轮询) ===================== */
+
+const MGX_HOST = 'http://xmgxx.maigaoxun.com/kyhl-weixin-1.0';
+
+/** 平台 HTTP 请求, 返回 [解析后的JSON|null, Set-Cookie] */
+function mgxRequest(string $path, ?string $cookie = null): array
+{
+    $ch = curl_init(MGX_HOST . $path);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HEADER         => true,
+        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_CONNECTTIMEOUT => 6,
+        CURLOPT_HTTPHEADER     => $cookie ? ['Cookie: ' . $cookie] : [],
+    ]);
+    $raw = curl_exec($ch);
+    if ($raw === false) {
+        $err = curl_error($ch);
+        curl_close($ch);
+        throw new RuntimeException('流量平台请求失败: ' . $err);
+    }
+    $hSize = curl_getinfo($ch, CURLINFO_HEADER_SIZE);
+    curl_close($ch);
+    $headers = [];
+    foreach (preg_split('/\r?\n/', substr((string) $raw, 0, $hSize)) ?: [] as $line) {
+        $idx = strpos($line, ':');
+        if ($idx !== false) {
+            $headers[trim(substr($line, 0, $idx))] = trim(substr($line, $idx + 1));
+        }
+    }
+    $body = substr((string) $raw, $hSize);
+    $start = strpos($body, '{');
+    $json  = $start !== false ? json_decode(substr($body, $start), true) : null;
+    return [$json, $headers['Set-Cookie'] ?? ''];
+}
+
+/**
+ * 查询套餐总流量: login.do 建会话 -> findCardInfo.do 取套餐。
+ * 数据口径与平台页面一致: flowSize / totalBytesCnt 单位均为 MB。
+ */
+function apiRemoteTraffic(bool $refresh = false): array
+{
+    $card = deviceConfig()['mgx_card'];
+    if ($card === '') {
+        throw new RuntimeException('未配置发卡平台设备号: 请在 config.local.php 增加 "mgx_card" 或设置环境变量 WIFI_MGX_CARD');
+    }
+    if (!$refresh) {
+        $cached = DataCache::get('mgx_traffic', 120.0);
+        if ($cached !== null) {
+            $out = json_decode($cached, true);
+            if (is_array($out)) {
+                $out['cached'] = true;
+                return $out;
+            }
+        }
+    }
+
+    [$login, $cookie] = mgxRequest('/card/login.do?responseFunction=cb&iccidMark=' . urlencode($card));
+    if (!is_array($login) || ($login['code'] ?? '') !== '0') {
+        throw new RuntimeException('发卡平台登录失败: ' . (is_array($login) ? ($login['msg'] ?? '未知错误') : '响应异常'));
+    }
+    if ($cookie === '' || !str_contains($cookie, '=')) {
+        throw new RuntimeException('发卡平台未返回会话');
+    }
+    [$info] = mgxRequest('/card/findCardInfo.do?iccidOrPhone=&responseFunction=cb&skipGift=true&rfm=' . mt_rand() / mt_getrandmax(), explode(';', $cookie)[0]);
+    if (!is_array($info) || ($info['code'] ?? '') !== '0') {
+        throw new RuntimeException('发卡平台查询失败: ' . (is_array($info) ? ($info['msg'] ?? '未知错误') : '响应异常'));
+    }
+
+    $entity = $info['entity'] ?? [];
+    // 总量 = 当前生效套餐列表 flowSize 之和(与平台页面的加总口径一致), 列表为空时退回 entity.flowSize
+    $lives  = $info['cardLiftList'] ?? [];
+    $totalMb = (float) ($entity['flowSize'] ?? 0);
+    $packages = [];
+    if ($lives) {
+        $totalMb = 0;
+        foreach ($lives as $life) {
+            $size = (float) ($life['flowSize'] ?? 0);
+            $totalMb += $size;
+            $packages[] = [
+                'name'   => (string) ($life['mealName'] ?? '套餐'),
+                'sizeGB' => round($size / 1024, 2),
+            ];
+        }
+    }
+    $usedMb = (float) ($entity['totalBytesCnt'] ?? 0);
+
+    $out = [
+        'time'        => date('c'),
+        'card'        => $card,
+        'package'     => (string) ($entity['cardPackage'] ?? ''),
+        'status'      => (string) ($entity['statusStr'] ?? ''),
+        'expireDate'  => (string) ($entity['expireDate'] ?? ''),
+        'totalBytes'  => (int) round($totalMb * 1048576),
+        'usedBytes'   => (int) round($usedMb * 1048576),
+        'leftBytes'   => (int) round(max(0, $totalMb - $usedMb) * 1048576),
+        'unlimited'   => $totalMb <= 0,          // flowSize 空/0 时平台显示为不限量
+        'packages'    => $packages,
+    ];
+    DataCache::put('mgx_traffic', json_encode($out, JSON_UNESCAPED_UNICODE));
+    $out['cached'] = false;
+    return $out;
+}
+
 /* ===================== 页面与接口路由 (配合 php -S 使用) ===================== */
 
 function jsonOut(array $payload, int $code = 200): bool
@@ -927,6 +1033,14 @@ if ($uri === '/api/traffic') {
 if ($uri === '/api/devices') {
     try {
         return jsonOut(apiDevices());
+    } catch (Throwable $e) {
+        return jsonOut(['error' => $e->getMessage()], 502);
+    }
+}
+if ($uri === '/api/remote-traffic') {
+    $refresh = ($_GET['refresh'] ?? '') === '1';
+    try {
+        return jsonOut(apiRemoteTraffic($refresh));
     } catch (Throwable $e) {
         return jsonOut(['error' => $e->getMessage()], 502);
     }

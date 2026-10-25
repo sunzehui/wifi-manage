@@ -61,6 +61,24 @@
     </div>
 
     <div class="card">
+      <div class="card-title">套餐流量（发卡平台）</div>
+      <div class="usage-big"><span id="pkgTotal">--</span><small id="pkgTotalUnit"></small></div>
+      <div class="usage-note" id="pkgNote">套餐总量</div>
+      <div class="bar"><div class="bar-fill" id="pkgBar"></div></div>
+      <div class="kv" style="margin-top:10px">
+        <span class="k">已用流量</span><span class="v" id="pkgUsed">--</span>
+        <span class="k">剩余流量</span><span class="v" id="pkgLeft">--</span>
+        <span class="k">套餐</span><span class="v" id="pkgName">--</span>
+        <span class="k">卡状态</span><span class="v" id="pkgStatus">--</span>
+        <span class="k">过期时间</span><span class="v" id="pkgExpire">--</span>
+      </div>
+      <div class="usage-note" id="pkgPackages" style="display:none"></div>
+      <div class="wifi-actions" style="grid-template-columns:1fr">
+        <button class="btn" id="btnPkgRefresh">刷新套餐流量</button>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-title">说明</div>
       <div class="kv" style="margin-top:0">
         <span class="k">统计来源</span><span class="v">设备原生流量统计</span>
@@ -68,8 +86,8 @@
       </div>
       <div class="usage-note" style="margin-top:12px">
         流量总量会保存到设备中（与设备后台「流量管理」同一设置）。剩余流量 = 总量 −
-        设备统计的本月已用。填 0 可清除总量设置（不限量）。想了解每台设备分别用了多少流量，
-        请前往「设备」页面查看。
+        设备统计的本月已用。填 0 可清除总量设置（不限量）。「套餐流量」来自发卡平台
+        （按设备号查询），点击按钮手动刷新，不自动轮询。
       </div>
       <div class="wifi-actions" style="grid-template-columns:1fr">
         <a class="btn" href="/devices">查看设备流量</a>
@@ -181,6 +199,50 @@ $('doQuota').addEventListener('click', async () => {
   } catch (e) { toast(e.message, false); }
   $('doQuota').disabled = false;
   $('doQuota').textContent = '保存';
+});
+
+/* ---------- 套餐流量 (发卡平台, 手动刷新) ---------- */
+function renderPkg(d) {
+  if (d.unlimited || !d.totalBytes) {
+    $('pkgTotal').textContent = '不限量';
+    $('pkgTotalUnit').textContent = '';
+    $('pkgBar').style.width = '0%';
+  } else {
+    const used = d.usedBytes, total = d.totalBytes;
+    const pct = total ? used / total * 100 : 0;
+    $('pkgTotal').textContent = (total / (1 << 30)).toFixed(total % (1 << 30) ? 1 : 0);
+    $('pkgTotalUnit').textContent = ' GB';
+    const bar = $('pkgBar');
+    bar.style.width = Math.min(100, pct) + '%';
+    bar.className = 'bar-fill' + (pct >= 100 ? ' bad' : pct >= 80 ? ' warn' : '');
+    $('pkgUsed').textContent = fmtBytes(used);
+    const left = $('pkgLeft');
+    left.textContent = d.leftBytes >= 0 ? fmtBytes(d.leftBytes) : '已超出 ' + fmtBytes(-d.leftBytes);
+    left.style.color = d.leftBytes < 0 ? 'var(--bad)' : (pct >= 80 ? 'var(--warn)' : 'var(--text)');
+  }
+  $('pkgName').textContent = d.package || '--';
+  $('pkgStatus').textContent = d.status || '--';
+  $('pkgExpire').textContent = d.expireDate ? d.expireDate.substring(0, 10) : '--';
+  if (d.packages && d.packages.length) {
+    $('pkgPackages').style.display = 'block';
+    $('pkgPackages').textContent = '当前生效: ' + d.packages.map(p => `${p.name}（${p.sizeGB} GB）`).join('、');
+  }
+  $('pkgNote').textContent = d.cached ? '套餐总量（缓存于 ' + new Date(d.time).toLocaleTimeString('zh-CN') + '，点击刷新更新）' : '套餐总量';
+}
+
+async function loadPkg(force) {
+  try {
+    const r = await fetch('/api/remote-traffic' + (force ? '?refresh=1' : ''));
+    if (!r.ok) throw new Error((await r.json()).error || ('HTTP ' + r.status));
+    renderPkg(await r.json());
+  } catch (e) {
+    $('pkgNote').textContent = '获取失败: ' + e.message;
+  }
+}
+loadPkg(false);   // 进入页面加载一次, 不轮询
+$('btnPkgRefresh').addEventListener('click', () => {
+  $('btnPkgRefresh').disabled = true;
+  loadPkg(true).finally(() => { $('btnPkgRefresh').disabled = false; });
 });
 
 if (window.__BOOT__) { render(window.__BOOT__); delete window.__BOOT__; }

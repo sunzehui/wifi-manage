@@ -14,7 +14,14 @@ WIFI_HOST=http://192.168.1.1 WIFI_USER=admin WIFI_PASS=你的设备密码 \
   PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8765 -t public server.php
 
 # 方式二: 本地配置文件（已加入 .gitignore，不会被提交）
-echo '<?php return ["user" => "admin", "pass" => "你的设备密码"];' > config.local.php
+cat > config.local.php <<'EOF'
+<?php
+return [
+    'user'     => 'admin',
+    'pass'     => '你的设备密码',
+    'mgx_card' => '你的发卡平台设备号',   // 可选, 用于「套餐流量」查询
+];
+EOF
 PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8765 -t public server.php
 ```
 
@@ -30,7 +37,7 @@ macOS 可直接双击 `启动仪表盘.command`（需先创建 config.local.php�
 | 页面 | 数据接口 | 刷新 | 说明 |
 |---|---|---|---|
 | `/` 首页 | `/api/status`（status1） | 网速区块 5s · 其他区块 30s | 设备状态、信号、电量、实时速率曲线、WiFi 管理（改名/改密码/开关）、SIM 卡槽切换、频段锁定、设备信息 |
-| `/traffic` 流量 | `/api/traffic`（statistics） | 手动（进入时加载一次） | 本月/累计流量、**套餐总量与剩余**（进度条、剩余、占比、超出提示）、连接时长；入口在首页流量卡片 |
+| `/traffic` 流量 | `/api/traffic`（statistics） | 手动（进入时加载一次） | 本月/累计流量、**套餐总量与剩余**（进度条、剩余、占比、超出提示）、连接时长；**套餐流量卡**（发卡平台总流量/已用/剩余，手动刷新）；入口在首页流量卡片 |
 | `/devices` 设备 | `/api/devices`（device_management） | 手动（进入时加载一次） | 连接设备表格/卡片、搜索筛选、单设备流量明细；入口在首页设备卡片 |
 
 首页只拉 status1（最快路径）；流量与设备数据收进二级页面，卡片上的数字来自缓存、
@@ -68,6 +75,8 @@ macOS 可直接双击 `启动仪表盘.command`（需先创建 config.local.php�
 - `GET|POST /api/band` — 频段配置 / 锁定（`{bands: [1,3,8,...]}`），复用设备原厂 customconfig 接口
 - `GET /api/traffic` · `POST /api/traffic/quota` — 流量数据 / 套餐总量设置（`{quotaGb: 150}`，0=清除），
   写入设备原生 `total_available_month` 字段（与设备后台「流量管理」同一设置），剩余 = 总量 − 设备统计已用
+- `GET /api/remote-traffic` — 发卡平台套餐流量查询（`?refresh=1` 强制刷新，默认 120s 缓存），
+  需在 config.local.php 配置 `mgx_card`；进入流量页加载一次，手动刷新，不轮询
 - `POST /api/wifi` — `{action: ssid|password|toggle, ...}` WiFi 设置，复用设备原厂 set 接口
 
 所有 set 命令均带 `<?xml version="1.0" encoding="US-ASCII"?>` 声明头（与原厂
