@@ -8,3 +8,4 @@ config.local.json
 android/build/
 android/debug.keystore
 node_modules/
+*.idsig
