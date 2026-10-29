@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- 状态栏图标只取 alpha 通道，由系统着色，故用纯白 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M1,9l2,2c4.97,-4.97 13.03,-4.97 18,0l2,-2C16.93,2.93 7.08,2.93 1,9zM9,17l3,3 3,-3c-1.65,-1.66 -4.34,-1.66 -6,0zM5,13l2,2c3.87,-3.87 10.13,-3.87 14,0l2,-2C19.18,9.18 4.82,9.18 5,13z" />
+</vector>

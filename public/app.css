@@ -272,6 +272,10 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .field input:focus { outline: none; border-color: var(--blue); }
 .eye { min-height: 46px; min-width: 46px; flex: none; font-size: 17px; }
+/* 单个布尔开关：复选框不该继承 .field input 那套 46px 文本框样式 */
+.field.toggle-row { display: flex; align-items: center; gap: 10px; min-height: 46px; }
+.field.toggle-row label { margin-bottom: 0; flex: 1; }
+.field.toggle-row input[type="checkbox"] { width: 22px; height: 22px; flex: none; min-height: 0; padding: 0; accent-color: var(--blue); }
 .field .err { font-size: 12px; color: var(--bad); margin-top: 5px; display: none; }
 .modal-btns { display: flex; gap: 10px; margin-top: 16px; }
 .modal-btns .btn { flex: 1; min-height: 46px; }

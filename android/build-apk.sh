@@ -25,13 +25,18 @@ cp ../public/*.html ../public/*.css ../public/*.js "$OUT/stage/assets/www/"
 echo "preset: $([ -f $OUT/stage/assets/www/preset.js ] && echo 已注入 || echo 无)"
 
 # 2. aapt2: 编译图标资源 -> manifest + resources + assets -> base.apk
+#    --java 生成 R.java, 让 Kotlin 侧能按 id 引用 drawable/mipmap
 "$BT/aapt2" compile --dir res -o "$OUT/res.zip"
+mkdir -p "$OUT/gen"
 "$BT/aapt2" link -I "$PLATFORM" \
   --manifest AndroidManifest.xml \
   --min-sdk-version 21 --target-sdk-version 28 \
   -R "$OUT/res.zip" \
   -A "$OUT/stage/assets" \
+  --java "$OUT/gen" \
   -o "$OUT/base.apk"
+
+javac -nowarn -classpath "$PLATFORM" -d "$OUT/classes" $(find "$OUT/gen" -name 'R.java')
 
 # 3. kotlinc + d8 -> classes.dex
 #    查找 kotlinc: KOTLIN_HOME > brew 安装位置 > PATH
@@ -61,8 +66,8 @@ fi
 # 这种小工具没必要为它付出体积和调用开销。
 "$KOTLINC" -no-reflect \
   -Xno-param-assertions -Xno-call-assertions -Xno-receiver-assertions \
-  -jvm-target 1.8 -classpath "$PLATFORM" -d "$OUT/classes" \
-  kotlin/com/sunzehui/wifimanage/MainActivity.kt
+  -jvm-target 1.8 -classpath "$PLATFORM:$OUT/classes" -d "$OUT/classes" \
+  kotlin/com/sunzehui/wifimanage/*.kt
 # Kotlin 代码依赖 stdlib，必须和业务 class 一起 dex 进同一个 classes.dex
 "$BT/d8" --release --lib "$PLATFORM" --min-api 21 \
   --output "$OUT" \

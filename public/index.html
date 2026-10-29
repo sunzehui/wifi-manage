@@ -322,6 +322,10 @@
       <label for="inCfgServer">服务器地址（可选，直连失败时填电脑上网关地址）</label>
       <input id="inCfgServer" type="text" placeholder="如 http://192.168.1.199:8765">
     </div>
+    <div class="field toggle-row">
+      <input id="inCfgNotify" type="checkbox">
+      <label for="inCfgNotify">在通知栏显示状态</label>
+    </div>
     <div class="modal-btns">
       <button class="btn" data-close>取消</button>
       <button class="btn primary" id="doCfg">保存并重连</button>
@@ -820,6 +824,7 @@ if (location.protocol === 'file:' || location.pathname.indexOf('/dashboard') ===
     $('inCfgPass').value = localStorage.getItem('mifi_pass') || '';
     $('inCfgCard').value = localStorage.getItem('mgx_card') || '';
     $('inCfgServer').value = localStorage.getItem('mifi_server') || '';
+    $('inCfgNotify').checked = localStorage.getItem('notify_on') !== '0';   // 默认开
     openModal('ovCfg');
   });
   $('doCfg').addEventListener('click', () => {
@@ -829,6 +834,9 @@ if (location.protocol === 'file:' || location.pathname.indexOf('/dashboard') ===
     localStorage.setItem('mifi_pass', $('inCfgPass').value);
     localStorage.setItem('mgx_card', $('inCfgCard').value.trim());
     localStorage.setItem('mifi_server', $('inCfgServer').value.trim());
+    localStorage.setItem('notify_on', $('inCfgNotify').checked ? '1' : '0');
+    // 关通知必须在 reload 之前撤条: 重载后旧页面已卸载，没人再去撤，那条会一直挂在通知栏
+    if (!$('inCfgNotify').checked) Native.clear();
     closeModals();
     location.reload();
   });
@@ -844,6 +852,7 @@ if (window.__BOOT__) {
 startPolling('/api/status', d => {
   status = d;
   renderSpeed(d);
+  Native.push(buildNotifyPayload(d));
   if (Date.now() - lastRestRender >= 30000) {
     renderRest(d);
     lastRestRender = Date.now();

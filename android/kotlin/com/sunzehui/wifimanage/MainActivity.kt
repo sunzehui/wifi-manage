@@ -1,7 +1,10 @@
 package com.sunzehui.wifimanage
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.KeyEvent
@@ -18,6 +21,8 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
 import kotlin.concurrent.thread
+
+private const val REQ_POST_NOTIFICATIONS = 1
 
 /**
  * 单 Activity：全屏 WebView 加载 assets 里的仪表盘页面，
@@ -60,8 +65,24 @@ class MainActivity : Activity() {
         // 允许 chrome://inspect / adb forward 远程调试
         WebView.setWebContentsDebuggingEnabled(true)
 
+        // 页面 → 通知栏的桥，必须在 loadUrl 之前挂上
+        wv.addJavascriptInterface(StatusBridge(this), "MifiNative")
+
+        requestNotifyPermission()
         LocalProxy.start()
         wv.loadUrl("file:///android_asset/www/index.html")
+    }
+
+    /**
+     * Android 13+ 起 POST_NOTIFICATIONS 是运行期权限。
+     * 实测（vivo / Android 16）即便 targetSdk 仍为 28 也不会自动授予，
+     * 不申请就一条都发不出去（numPostedByApp=0），所以必须主动弹。
+     */
+    private fun requestNotifyPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED) return
+        requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_POST_NOTIFICATIONS)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -74,6 +95,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        // 进程可能随之结束，留一条还在报旧数字的通知栏状态是假的
+        StatusNotifier.clear(this)
         webView?.destroy()
         webView = null
         super.onDestroy()

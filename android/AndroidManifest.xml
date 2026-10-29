@@ -6,6 +6,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 13+ 是运行期权限, 由 MainActivity 主动申请; targetSdk 28 并不会自动授予 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="随身WiFi"

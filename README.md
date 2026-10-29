@@ -48,6 +48,32 @@ WIFI_PASS=你的设备密码 PORT=8766 node server.js
 KICKOFF），以及浏览器既不让你读 `Set-Cookie` 也不让你发 `Cookie`（发卡平台的会话只能由代理保管）。
 若个别固件拒绝本机代理，可在 ⚙ 里填「服务器地址」（电脑上网关地址）切换为局域网模式。
 
+### 通知栏状态条
+
+App 在通知栏**常驻一条**状态通知，不进 App 也能瞟到当前状态：
+
+| 位置 | 内容 | 来源 |
+|---|---|---|
+| 标题 | 网络制式 + 已连接/未联网（如「4G LTE · 已连接」） | 首页 5s 状态轮询的同一次结果 |
+| 正文 | ↓ 下行速率 ↑ 上行速率 | 同上 |
+| 第三行 | 在线设备数 · 信号档位 · 电量与充放电 | 同上 |
+| 时间 | 「x 秒前」相对时间 | 该次采样的时刻，即快照的新鲜度 |
+
+- **默认开启**，开关在右上角 **⚙ → 在通知栏显示状态**（存 `localStorage`，跨重启保持）。关掉后当前这条立即撤掉，之后轮询也不再推送；重新打开即恢复
+- 低重要性、静音、不振动、不弹横幅（每 5s 刷新一次，任何提醒都会变成刷屏）；`ongoing` 所以用户滑不掉，点它回到 App（复用既有任务栈，不会新开实例）
+- **取不到数据时那一条就地变成降级文案**（标题带 ⚠ 并染红，正文是页面已经给出的具体原因：设备不可达 / 密码错 / 会话被踢 / 登录锁定），不新增第二条告警；恢复后异常标记自动清除
+- 只刷新**应用存活期间**的数据：从首页轮询经原生桥推送，Activity 销毁时撤条，不留一条还在报旧数字的假状态；划掉 App 后已推的那条保留最后快照，靠相对时间表明有多旧
+- 权限：清单声明 `POST_NOTIFICATIONS`，Android 13+ 起由 `MainActivity` 在启动时主动申请。targetSdk 仍是 28，但实测（vivo / Android 16）低 targetSdk **并不会**自动授予该权限，不申请就一条都发不出去（`numBlocked` 一路涨）；将来把 targetSdk 提到 33+ 时这段申请依然要保留，只是届时由系统强制
+
+**为什么没有做真后台刷新**（后台自己轮询、App 不开也能更新）：设备同一时刻**只允许一个管理会话**，
+任何新登录都会把既有会话踢掉（被踢的一方此后一直收到 `KICKOFF`），而 Digest 会话（realm/nonce/nc 计数）
+存在页面侧。原生若自己后台轮询，只有两条路，都被砍掉并归入待办：
+
+1. 后台承载一个离屏 WebView 让页面网关继续跑——等于把浏览器藏在服务里，进程/内存开销与生命周期都要自己管
+2. 把整套网关下沉进 `LocalProxy`——需要在 Kotlin 重抄一遍摘要认证、XML 解析与字段换算，与 `core.js` 变成两份实现
+
+两条都超出「瞟一眼状态」的收益，所以这轮选定形态是**常驻一条 + 前台刷新**，不做后台轮询。
+
 重新构建 APK（免 Gradle，需 Android SDK build-tools + Kotlin 编译器 2.0.x）：
 
 ```bash
@@ -157,6 +183,8 @@ docker run --rm -v "$PWD":/app php:8.4 php /app/tests/digest_vectors.php
 - `public/index.html`、`public/traffic.html`、`public/devices.html` — 三个页面
 - `public/app.css`、`public/app.js` — 公共样式与脚本（含 API 适配层）
 - `android/kotlin/com/sunzehui/wifimanage/MainActivity.kt` — APK 壳：全屏 WebView + 本地代理 `LocalProxy`
+- `android/kotlin/com/sunzehui/wifimanage/StatusNotifier.kt` — 通知栏常驻状态条 + 页面→原生的窄桥 `StatusBridge`
+- `android/res/drawable/ic_stat_mifi.xml` — 状态栏小图标（24dp 纯白 alpha 矢量 WiFi）
 - `android/tools/make_icon.py` — 程序化生成启动图标（`res/mipmap-*/`、`public/icon.png`）
 - `android/tools/proxy-test/` — 不接手机验证代理的 JVM 冒烟测试（`run.sh`）
 - `tests/` — Node / PHP 单元测试（Digest 固定向量、设备列表解析）

@@ -36,7 +36,47 @@ const Api = (APK_MODE)
   })
   : apiViaServer();
 
+/* ---------- 原生桥 (仅 APK): 通知栏状态条 ----------
+ * 网页版没有 MifiNative, 整条路径静默跳过; 通知栏写失败也不该打断轮询。
+ * 载荷契约 (与 StatusNotifier.kt 一致): { title, line1, line2, ts, bad }
+ */
+function nativeCall(fn, arg) {
+  const bridge = window.MifiNative;
+  if (!bridge || typeof bridge[fn] !== 'function') return;
+  try {
+    if (arg === undefined) bridge[fn](); else bridge[fn](arg);
+  } catch (e) { /* 忽略: 通知失败不影响页面 */ }
+}
+const notifyEnabled = () => localStorage.getItem('notify_on') !== '0';   // 默认开
+const Native = {
+  push: payload => { if (notifyEnabled()) nativeCall('updateStatus', JSON.stringify(payload)); },
+  clear: () => nativeCall('clearStatus'),
+};
+
+/* ---------- 通知栏载荷 ----------
+ * 文案全部在这里算齐（速率/信号/电量都复用页面同款格式化函数），原生侧只渲染，
+ * 避免出现第二套换算。与 StatusNotifier.kt 的契约就是这五个键。
+ * bad=true 表示这组数字来自失败分支，不是设备真实状态。
+ */
+function buildNotifyPayload(d, bad) {
+  const connected = d.network.status === 'connected';
+  // core.js 回的 network.mode 是短名(LTE/5G NR), 页面还要再过一遍 netTypeName 才显示「4G LTE」;
+  // 这里走同一条映射, 否则通知栏和页面各叫一个名字。
+  const net = netTypeName(d.network.mode === 'LTE' ? '17' : d.network.mode);
+  const batt = !d.battery.present ? '无电池'
+    : d.battery.percent == null ? d.battery.state
+    : `${d.battery.percent}% ${d.battery.state}`;
+  return {
+    title: `${net} · ${connected ? '已连接' : '未联网'}`,
+    line1: `↓ ${fmtRate(d.rate.rxRate)} ↑ ${fmtRate(d.rate.txRate)}`,
+    line2: `${d.lan.connectedCount} 台在线 · ${signalLabel(d.network.rsrpDbm)} · ${batt}`,
+    ts: Date.now(),
+    bad: !!bad,
+  };
+}
+
 const $ = id => document.getElementById(id);
+
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const fmtBytes = b => {
   if (b == null || isNaN(b)) return '--';
@@ -108,6 +148,14 @@ function showErrorBanner(msg) {
   const banner = $('banner');
   banner.textContent = '无法获取设备数据：' + msg + '。请确认电脑已连接到随身 WiFi 的网络。';
   banner.classList.add('show');
+  // 失败也走同一条通知: 复用横幅这句原因文案, 不新起第二条, 也不会静默停在旧数字上
+  Native.push({
+    title: '⚠ 随身WiFi · 设备不可达',
+    line1: msg,
+    line2: '打开 App 可重试',
+    ts: Date.now(),
+    bad: true,
+  });
 }
 function hideErrorBanner() { $('banner').classList.remove('show'); }
 
