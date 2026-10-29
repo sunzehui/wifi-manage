@@ -36,7 +36,11 @@
       headers: auth ? { Authorization: auth } : {},
       signal: AbortSignal.timeout(timeoutMs),
     });
-    return { body: await res.text(), wwwAuth: res.headers.get('www-authenticate') || '' };
+    const body = await res.text();
+    // 代理连不上上游时会回 502 + 可读文案(如 "代理转发失败: Read timed out"),
+    // 直接把这段原因抛出去, 否则会被后面的 <RGW>/KICKOFF 判定吞成通用失败。
+    if (res.status >= 500) throw new Error(body.trim() || `本地代理转发失败 (HTTP ${res.status})`);
+    return { body, wwwAuth: res.headers.get('www-authenticate') || '' };
   }
 
   /* ---------------- 会话 (等价于 server.php 的 session 文件) ----------------
@@ -94,9 +98,11 @@
     session.nonce = ch.nonce;
     session.qop = ch.qop;
     session.nc = 1;
-    // 设备即使登录成功也会再回一次质询(实测), 不能据此判定失败;
-    // 真正的判据是随后数据请求返回的 <login_status>。
-    await httpGet(cfg.host + C.loginUrl(cfg, ch));
+    // 登录请求除查询串外还要带 Authorization 头(原厂 authentication() 的做法),
+    // 否则设备只回一次新质询、不建会话, 后续数据请求全是 UNAUTHORIZED。
+    // 成功的登录响应体是 "HTTP/1.1 200 OK..." 且不再带质询; 收到质询即表示没登进去。
+    const req = C.loginRequest(cfg, ch);
+    await httpGet(cfg.host + req.path, req.auth);
     saveSession();
   }
   function noteLoginResult(ok, reason) {
@@ -237,7 +243,7 @@
 
   /* ---------------- 发卡平台 ---------------- */
 
-  const MGX_TIMEOUT = 15000;
+  const MGX_TIMEOUT = 20000;   // 代理侧连接超时已放到 12s, 这里必须更大, 否则会先被前端掐断
 
   /** 平台响应前面有几行空白, 直接 JSON.parse 会失败, 从第一个 { 开始截 */
   function parseLooseJson(text) {
@@ -251,7 +257,10 @@
       credentials: 'include',
       signal: AbortSignal.timeout(MGX_TIMEOUT),
     });
-    const j = parseLooseJson(await r.text());
+    const text = await r.text();
+    // 本地代理转发失败时会回 502 + 可读文案, 直接透出, 不要当成"响应无法解析"
+    if (r.status >= 500) throw new Error(text.trim() || `本地代理转发失败 (HTTP ${r.status})`);
+    const j = parseLooseJson(text);
     if (!j) throw new Error('发卡平台返回异常(响应无法解析)');
     return j;
   }
@@ -260,6 +269,18 @@
     '/card/login.do?responseFunction=cb&iccidMark=' + encodeURIComponent(card);
 
   async function remoteTraffic(refresh) {
+    try {
+      return await remoteTrafficOnce(refresh);
+    } catch (e) {
+      // 热点上行会偶发连不上平台(实测: 8 秒连接超时, 隔 1 秒重试即成功)。
+      // 只对网络类错误补一次, 设备号错/会话过期这类逻辑错误直接抛。
+      if (!/代理转发失败|Failed to fetch|NetworkError|timed out/i.test(e.message || '')) throw e;
+      await new Promise((r) => setTimeout(r, 800));
+      return remoteTrafficOnce(refresh);
+    }
+  }
+
+  async function remoteTrafficOnce(refresh) {
     const cfg = cfgsafe();
     if (!cfg.mgxCard) throw new Error('未配置发卡平台设备号: 点击右上角 ⚙ 设置');
     if (!refresh) {

@@ -25,6 +25,21 @@ jobs:
       - name: 语法检查
         run: php -l server.php && php -l config.local.php.example
 
+      - name: Digest 固定向量
+        run: php tests/digest_vectors.php
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: JS 语法检查
+        run: |
+          node --check server.js
+          for f in public/*.js; do node --check "$f"; done
+
+      - name: JS 单元测试
+        run: node --test tests/core.test.js
+
       - name: 启动烟雾测试
         run: |
           PHP_CLI_SERVER_WORKERS=2 php -S 127.0.0.1:8765 -t public server.php &

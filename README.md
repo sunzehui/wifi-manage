@@ -34,7 +34,7 @@ WIFI_PASS=你的设备密码 PORT=8766 node server.js
 
 ## Android App (APK)
 
-`android/wifi-dashboard.apk`（45KB，debug 签名）——手机**无需任何服务器**，
+`android/wifi-dashboard.apk`（约 760KB，debug 签名，含 Kotlin 运行时）——手机**无需任何服务器**，
 连接随身 WiFi 后直接使用：
 
 1. 下载 APK 安装（需允许未知来源）
@@ -42,13 +42,25 @@ WIFI_PASS=你的设备密码 PORT=8766 node server.js
 3. 所有功能与网页版一致：状态/网速/流量/设备/WiFi 管理/SIM 切换/频段锁定
 
 原理：页面与内置 JS 网关（`core.js` + `gateway.js`，与 server.js 共享同一套核心逻辑）
-打包进 APK assets，在 WebView 里直连设备完成 Digest 登录与数据解析。
-若个别固件拒绝 WebView 直连，可在 ⚙ 里填「服务器地址」（电脑上网关地址）切换为局域网模式。
+打包进 APK assets；`MainActivity.kt` 在全屏 WebView 之外再起一个本地 HTTP 代理
+（`127.0.0.1:8787`），把 `/mgx/...` 转发到发卡平台、其余转发到 `192.168.1.1`。
+代理存在的原因有两个：WebView 的 `fetch` 强制携带 `Accept-Encoding: gzip`（该固件见此头即
+KICKOFF），以及浏览器既不让你读 `Set-Cookie` 也不让你发 `Cookie`（发卡平台的会话只能由代理保管）。
+若个别固件拒绝本机代理，可在 ⚙ 里填「服务器地址」（电脑上网关地址）切换为局域网模式。
 
-重新构建 APK（免 Gradle，需 Android SDK build-tools + Java）：
+重新构建 APK（免 Gradle，需 Android SDK build-tools + Kotlin 编译器 2.0.x）：
 
 ```bash
-cd android && ./build-apk.sh   # 产物: android/wifi-dashboard.apk
+cd android && ./build-apk.sh           # 产物: android/wifi-dashboard.apk
+./tools/proxy-test/run.sh              # 可选: 不接手机验证本地代理（跑真实 HTTP 请求）
+```
+
+Kotlin 编译器只要 2.0.x：2.1+ 的 `kotlin.Metadata` 版本高于 build-tools 35 内置 R8 的识别上限
+（2.0.0），`d8` 会对 stdlib 每个类刷一条警告。安装方式（无需 sudo）：
+
+```bash
+curl -L -o /tmp/k.zip https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+mkdir -p ~/.local/share && unzip -q /tmp/k.zip -d ~/.local/share   # 得到 ~/.local/share/kotlinc
 ```
 
 ## 使用
@@ -121,27 +133,63 @@ macOS 可直接双击 `启动仪表盘.command`（需先创建 config.local.php�
 getXMLDocToString 一致，缺它设备会报 `CGI parse error`），并把设备错误响应
 （Error/UNAUTHORIZED）作为失败抛出，不会假成功。
 
+## 检查与测试
+
+```bash
+node --test tests/core.test.js     # Digest 固定向量 + 设备列表解析
+php tests/digest_vectors.php       # 同一组向量的 PHP 侧（需 PHP 8.4+）
+```
+
+CI（`.github/workflows/ci.yml`）在 PHP 8.4 / 8.5 上运行上述两项与页面烟雾测试，
+并用 `node --check` 检查 `server.js` 和 `public/*.js`。
+本机没有 PHP 时可用容器跑同款检查：
+
+```bash
+docker run --rm -v "$PWD":/app php:8.4 php -l /app/server.php
+docker run --rm -v "$PWD":/app php:8.4 php /app/tests/digest_vectors.php
+```
+
 ## 文件
 
 - `server.php` / `server.js` — 网关服务（PHP / Node 双实现，登录 / 缓存 / 并行拉取 / 接口与页面路由）
 - `public/core.js` — 共享核心：MD5（原厂同源实现）、Digest、XML 解析、数据组装
-- `public/gateway.js` — APK 内置浏览器网关（直连设备）
+- `public/gateway.js` — APK 内置浏览器网关（经本地代理转设备与发卡平台）
 - `public/index.html`、`public/traffic.html`、`public/devices.html` — 三个页面
 - `public/app.css`、`public/app.js` — 公共样式与脚本（含 API 适配层）
-- `android/` — WebView 壳工程与离线构建脚本（`./build-apk.sh`）
+- `android/kotlin/com/sunzehui/wifimanage/MainActivity.kt` — APK 壳：全屏 WebView + 本地代理 `LocalProxy`
+- `android/tools/make_icon.py` — 程序化生成启动图标（`res/mipmap-*/`、`public/icon.png`）
+- `android/tools/proxy-test/` — 不接手机验证代理的 JVM 冒烟测试（`run.sh`）
+- `tests/` — Node / PHP 单元测试（Digest 固定向量、设备列表解析）
+- `docs/ui-redesign-requirements.md` — 2026-10-25 的 UI 改版需求稿（归档）
 - `启动仪表盘.command` — macOS 双击启动
 - `.mifi_session.json`、`.data_cache.json` — 运行时自动生成的会话与缓存文件
 
 ## 工作原理
 
 1. 登录：`GET /login.cgi` 取 Digest 质询（realm/nonce），按原厂前端算法计算 response
-   后访问 `login.cgi?Action=Digest&...` 完成一键登录；会话过期自动重新握手。
+   后访问 `login.cgi?Action=Digest&...` 完成一键登录；该请求还必须同时带一个
+   `uri="/cgi/xml_action.cgi"` 的 `Authorization` 头（原厂 `authentication()` 的做法），
+   设备靠它登记管理会话 —— 只发查询串会一直返回 `<login_status>UNAUTHORIZED</login_status>`。
+   会话过期自动重新握手。
 2. 读数据：带 `Authorization: Digest`（uri 为 `/cgi/xml_action.cgi`，nc 递增）请求
    `xml_action.cgi?method=get&module=duster&file=status1|statistics|device_management`。
 3. 写设置：`method=set` 通道下发 `uapxb_wlan_security_settings`（SSID 十六进制 UTF-16 编码 /
    按当前加密模式节点写 key）和 `uapxb_wlan_basic_settings`（wlan_enable 开关）。
 4. 字段换算与原厂后台一致：LTE 时 RSRP=-140+raw dBm、RSRQ=-19.5+raw/2 dB、
    RSSI=-110+raw dBm；电量百分比取 `Battery_voltage`；SSID 为 UTF-16 十六进制编码。
+
+### 设备流量的字段来源（核对数值真伪用）
+
+| 原厂页面 | 数据文件 | 用到的字段 |
+|---|---|---|
+| `js/panel/home_network/data_traffic.js`（设备流量） | `device_management` | `rx_data_used` / `tx_data_used`（累计）、`*_monthly`、`*_last3day`，按 1024 进制显示 GB/MB/KB |
+| `js/panel/home_network/connected_device.js`（已连接设备） | `device_management` | 名称/IP/MAC/类型/时长，不含流量 |
+| `js/panel/internet/traffic_statistics.js`（流量统计） | `statistics` | 整机 `WanStatistics.total_used_month` 等 |
+
+`/api/devices` 原样透传 `client_list` 的计数（`public/core.js` 的 `buildDevices`），
+不做单位换算或二次计算。本机固件（MF518A03_CN_MGX-V5.8.2）实测出现过个别客户端
+计数基数异常（达 PB 级，与整机 `total_used_month` 相差数个数量级）——判断真实用量以
+`statistics` 为准。
 
 ## 说明
 

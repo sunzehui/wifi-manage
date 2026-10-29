@@ -121,89 +121,116 @@ object LocalProxy {
     }
 
     private fun handle(client: Socket) {
+        var responded = false
         try {
-            client.use { socket ->
-                socket.soTimeout = 20_000
-                val input = socket.getInputStream()
-                val output = socket.getOutputStream()
+            client.soTimeout = 20_000
+            val input = client.getInputStream()
+            val output = client.getOutputStream()
 
-                val requestLine = readHttpLine(input) ?: return
-                val parts = requestLine.split(" ")
-                if (parts.size < 2) return
-                val method = parts[0]
-                val path = parts[1]
+            val requestLine = readHttpLine(input) ?: return
+            val parts = requestLine.split(" ")
+            if (parts.size < 2) return
+            val method = parts[0]
+            val path = parts[1]
 
-                var contentLength = 0
-                val headers = HashMap<String, String>()
-                while (true) {
-                    val line = readHttpLine(input) ?: break
-                    if (line.isEmpty()) break
-                    val colon = line.indexOf(':')
-                    if (colon > 0) {
-                        val key = line.substring(0, colon).trim().lowercase()
-                        val value = line.substring(colon + 1).trim()
-                        headers[key] = value
-                        if (key == "content-length") contentLength = value.toIntOrNull() ?: 0
-                    }
+            var contentLength = 0
+            val headers = HashMap<String, String>()
+            while (true) {
+                val line = readHttpLine(input) ?: break
+                if (line.isEmpty()) break
+                val colon = line.indexOf(':')
+                if (colon > 0) {
+                    val key = line.substring(0, colon).trim().lowercase()
+                    val value = line.substring(colon + 1).trim()
+                    headers[key] = value
+                    if (key == "content-length") contentLength = value.toIntOrNull() ?: 0
                 }
-                val body = ByteArray(contentLength)
-                var read = 0
-                while (read < contentLength) {
-                    val n = input.read(body, read, contentLength - read)
-                    if (n < 0) break
-                    read += n
-                }
-
-                val isMgx = path.startsWith("/mgx/")
-                val target = if (isMgx) MGX + path.substring(4) else DEV + path
-
-                val conn = URL(target).openConnection() as HttpURLConnection
-                conn.requestMethod = method
-                conn.connectTimeout = 8_000
-                conn.readTimeout = 20_000
-                // 只透传必要头；绝不带 Accept-Encoding（设备会 KICKOFF）
-                headers["authorization"]?.let { conn.setRequestProperty("Authorization", it) }
-                val cookie = headers["cookie"]?.takeIf { it.isNotBlank() }
-                    ?: (if (isMgx) mgxSession else null)
-                if (!cookie.isNullOrBlank()) conn.setRequestProperty("Cookie", cookie)
-                headers["content-type"]?.let { conn.setRequestProperty("Content-Type", it) }
-                if (method == "POST" && body.isNotEmpty()) {
-                    conn.doOutput = true
-                    conn.outputStream.use { it.write(body) }
-                }
-
-                val status = conn.responseCode
-                val stream = if (status >= 400) conn.errorStream else conn.inputStream
-                val resp = stream?.let { readAll(it) } ?: ByteArray(0)
-                val mime = conn.contentType ?: "text/plain"
-
-                val setCookies = conn.headerFields.entries
-                    .firstOrNull { it.key?.equals("Set-Cookie", ignoreCase = true) == true }
-                    ?.value
-
-                val head = buildString {
-                    append("HTTP/1.1 ").append(status).append(" OK\r\n")
-                    append("Content-Type: ").append(mime).append("\r\n")
-                    conn.getHeaderField("WWW-Authenticate")?.let {
-                        append("WWW-Authenticate: ").append(it).append("\r\n")
-                    }
-                    if (isMgx) {
-                        // 发卡平台：会话留在代理内部，不转发给浏览器
-                        setCookies?.firstNotNullOfOrNull { firstCookiePair(it) }?.let { mgxSession = it }
-                    } else {
-                        setCookies?.forEach { append("Set-Cookie: ").append(it).append("\r\n") }
-                    }
-                    append("Content-Length: ").append(resp.size).append("\r\n")
-                    append("Access-Control-Allow-Origin: *\r\n")
-                    append("Access-Control-Allow-Headers: Authorization, Content-Type, Cookie\r\n")
-                    append("Connection: close\r\n\r\n")
-                }
-                output.write(head.toByteArray(Charsets.ISO_8859_1))
-                output.write(resp)
-                output.flush()
             }
-        } catch (_: Exception) {
+            val body = ByteArray(contentLength)
+            var read = 0
+            while (read < contentLength) {
+                val n = input.read(body, read, contentLength - read)
+                if (n < 0) break
+                read += n
+            }
+
+            val isMgx = path.startsWith("/mgx/")
+            val target = if (isMgx) MGX + path.substring(4) else DEV + path
+
+            val conn = URL(target).openConnection() as HttpURLConnection
+            conn.requestMethod = method
+            // 热点上行抖动时 8 秒不够 (实测平台偶发连接超时, 隔一秒就通了), 放宽到 12 秒
+            conn.connectTimeout = 12_000
+            conn.readTimeout = 20_000
+            // 设备常回「200 + 无 Content-Length + keep-alive」这种响应体长度未知的报文，
+            // 不同 HTTP 栈处理不一样：安卓的会当成空体，JDK 的会一直读到读超时。
+            // 主动要求对端关闭连接，让行为在各平台上都确定。
+            conn.setRequestProperty("Connection", "close")
+            // 只透传必要头；绝不带 Accept-Encoding（设备会 KICKOFF）
+            headers["authorization"]?.let { conn.setRequestProperty("Authorization", it) }
+            val cookie = headers["cookie"]?.takeIf { it.isNotBlank() }
+                ?: (if (isMgx) mgxSession else null)
+            if (!cookie.isNullOrBlank()) conn.setRequestProperty("Cookie", cookie)
+            headers["content-type"]?.let { conn.setRequestProperty("Content-Type", it) }
+            if (method == "POST" && body.isNotEmpty()) {
+                conn.doOutput = true
+                conn.outputStream.use { it.write(body) }
+            }
+
+            val status = conn.responseCode
+            val stream = if (status >= 400) conn.errorStream else conn.inputStream
+            val resp = stream?.let { readAll(it) } ?: ByteArray(0)
+            val mime = conn.contentType ?: "text/plain"
+
+            val setCookies = conn.headerFields.entries
+                .firstOrNull { it.key?.equals("Set-Cookie", ignoreCase = true) == true }
+                ?.value
+
+            val head = buildString {
+                append("HTTP/1.1 ").append(status).append(" OK\r\n")
+                append("Content-Type: ").append(mime).append("\r\n")
+                conn.getHeaderField("WWW-Authenticate")?.let {
+                    append("WWW-Authenticate: ").append(it).append("\r\n")
+                }
+                if (isMgx) {
+                    // 发卡平台：会话留在代理内部，不转发给浏览器
+                    setCookies?.firstNotNullOfOrNull { firstCookiePair(it) }?.let { mgxSession = it }
+                } else {
+                    setCookies?.forEach { append("Set-Cookie: ").append(it).append("\r\n") }
+                }
+                append("Content-Length: ").append(resp.size).append("\r\n")
+                append("Access-Control-Allow-Origin: *\r\n")
+                append("Access-Control-Allow-Headers: Authorization, Content-Type, Cookie\r\n")
+                append("Connection: close\r\n\r\n")
+            }
+            output.write(head.toByteArray(Charsets.ISO_8859_1))
+            output.write(resp)
+            output.flush()
+            responded = true
+        } catch (e: Exception) {
+            // 上游超时/连不上时不能直接掐断，否则浏览器只看到网络错误、页面无从提示。
+            Log.w("LocalProxy", "forward failed: ${e.message}")
+            if (!responded) respondError(client, e)
+        } finally {
             runCatching { client.close() }
+        }
+    }
+
+    /** 给浏览器回一个可读的 502；连接已断则忽略 */
+    private fun respondError(client: Socket, e: Exception) {
+        runCatching {
+            val msg = ("代理转发失败: " + (e.message ?: e.javaClass.simpleName))
+                .toByteArray(Charsets.UTF_8)
+            val head = "HTTP/1.1 502 Bad Gateway\r\n" +
+                "Content-Type: text/plain; charset=utf-8\r\n" +
+                "Access-Control-Allow-Origin: *\r\n" +
+                "Content-Length: " + msg.size + "\r\n" +
+                "Connection: close\r\n\r\n"
+            client.getOutputStream().run {
+                write(head.toByteArray(Charsets.ISO_8859_1))
+                write(msg)
+                flush()
+            }
         }
     }
 

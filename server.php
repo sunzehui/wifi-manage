@@ -53,6 +53,32 @@ function deviceConfig(): array
     return $cfg;
 }
 
+/**
+ * 登录请求的 Digest 计算（纯函数，登录与测试共用；JS 侧对应 core.js 的 loginRequest）。
+ * 与原厂前端一致：查询串的 HA2 针对 /cgi/protected.cgi；同时还必须带 HA2 为
+ * /cgi/xml_action.cgi 的 Authorization 头，设备靠这个头才真正登记管理会话——
+ * 只发查询串会一直返回 UNAUTHORIZED。
+ *
+ * @return array{0:string,1:string} [login 路径(含查询串), Authorization 头]
+ */
+function digestLoginRequest(array $cfg, array $challenge, ?string $cnonce = null): array
+{
+    $nc       = '00000001';
+    $cnonce   = $cnonce ?? substr(md5(uniqid('', true)), 0, 16);
+    $ha1      = md5($cfg['user'] . ':' . $challenge['realm'] . ':' . $cfg['pass']);
+    $resp     = md5("{$ha1}:{$challenge['nonce']}:{$nc}:{$cnonce}:{$challenge['qop']}:" . md5('GET:/cgi/protected.cgi'));
+    $authResp = md5("{$ha1}:{$challenge['nonce']}:{$nc}:{$cnonce}:{$challenge['qop']}:" . md5('GET:/cgi/xml_action.cgi'));
+    $path = '/login.cgi?Action=Digest&username=' . urlencode($cfg['user'])
+        . '&realm=' . urlencode($challenge['realm'])
+        . '&nonce=' . urlencode($challenge['nonce'])
+        . "&response={$resp}&qop={$challenge['qop']}&cnonce={$cnonce}&temp=asr";
+    $auth = 'Digest username="' . $cfg['user'] . '", realm="' . $challenge['realm'] . '"'
+        . ', nonce="' . $challenge['nonce'] . '", uri="/cgi/xml_action.cgi"'
+        . ', response="' . $authResp . '", qop=' . $challenge['qop']
+        . ", nc={$nc}, cnonce=\"{$cnonce}\"";
+    return [$path, $auth];
+}
+
 /* ===================== 设备 Digest 会话 (多 worker 共享) ===================== */
 
 final class MifiSession
@@ -179,16 +205,11 @@ final class MifiSession
         $this->nonce = $challenge['nonce'];
         $this->qop   = $challenge['qop'];
 
-        // 与原厂前端一致的登录响应计算 (HA2 针对 /cgi/protected.cgi)
-        $ha1     = md5(implode(':', [deviceConfig()['user'], $this->realm, deviceConfig()['pass']]));
-        $ha2     = md5('GET:/cgi/protected.cgi');
-        $cnonce  = substr(md5(uniqid('', true)), 0, 16);
-        $resp    = md5("{$ha1}:{$this->nonce}:00000001:{$cnonce}:{$this->qop}:{$ha2}");
-        $loginPath = '/login.cgi?Action=Digest&username=' . urlencode(deviceConfig()['user'])
-            . '&realm=' . urlencode($this->realm)
-            . '&nonce=' . urlencode($this->nonce)
-            . "&response={$resp}&qop={$this->qop}&cnonce={$cnonce}&temp=asr";
-        $this->httpGet($loginPath);
+        [$loginPath, $loginAuth] = digestLoginRequest(
+            ['user' => deviceConfig()['user'], 'pass' => deviceConfig()['pass']],
+            $challenge
+        );
+        $this->httpGet($loginPath, $loginAuth);
         $this->saveSession(nc: 1);
     }
 

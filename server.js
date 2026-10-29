@@ -77,7 +77,9 @@ async function login() {
   session.nonce = ch.nonce;
   session.qop = ch.qop;
   session.nc = 1;
-  await rawGet(CFG.host + core.loginUrl(CFG, ch), null, 8);
+  // 查询串之外还要带 Authorization 头, 否则设备不登记会话(见 core.js loginRequest)
+  const req = core.loginRequest(CFG, ch);
+  await rawGet(CFG.host + req.path, req.auth, 8);
 }
 
 function authHeader(method) {

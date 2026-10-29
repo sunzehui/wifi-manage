@@ -299,17 +299,35 @@ const md5 = hex_md5;
     return { realm, nonce, qop: pick('qop') || 'auth' };
   }
 
-  /** 登录 URL (HA2 针对 /cgi/protected.cgi, 与原厂 doLogin 相同) */
-  function loginUrl(cfg, challenge) {
+  /**
+   * 登录请求 (与原厂 doLogin + authentication() 逐项一致)。
+   *
+   * 查询串里 response 的 HA2 是 /cgi/protected.cgi, 同时还必须带一个 HA2 为
+   * /cgi/xml_action.cgi 的 Authorization 头 —— 设备是靠这个头才真正登记管理会话的。
+   * 只发查询串时设备回 200 + 一次新质询、不建会话, 之后所有数据请求都是
+   * <login_status>UNAUTHORIZED</login_status>; 此时用浏览器登录一次设备后台,
+   * 任何携带合法 Digest 的请求就又都能读数据了(会话是设备侧的开关, 与哪次登录无关)。
+   * 两处共用一个 cnonce (原厂 doLogin 的 AuthCnonce)。
+   */
+  function loginRequest(cfg, challenge) {
     const ha1 = md5([cfg.user, challenge.realm, cfg.pass].join(':'));
-    const ha2 = md5('GET:/cgi/protected.cgi');
+    const nc = '00000001';
     const cnonce = md5(String(Date.now()) + Math.random()).slice(0, 16);
-    const resp = md5([ha1, challenge.nonce, '00000001', cnonce, challenge.qop, ha2].join(':'));
-    return '/login.cgi?Action=Digest&username=' + encodeURIComponent(cfg.user)
-      + '&realm=' + encodeURIComponent(challenge.realm)
-      + '&nonce=' + encodeURIComponent(challenge.nonce)
-      + '&response=' + resp + '&qop=' + challenge.qop
-      + '&cnonce=' + cnonce + '&temp=asr';
+    const resp = md5([ha1, challenge.nonce, nc, cnonce, challenge.qop,
+      md5('GET:/cgi/protected.cgi')].join(':'));
+    const authResp = md5([ha1, challenge.nonce, nc, cnonce, challenge.qop,
+      md5('GET:/cgi/xml_action.cgi')].join(':'));
+    return {
+      path: '/login.cgi?Action=Digest&username=' + encodeURIComponent(cfg.user)
+        + '&realm=' + encodeURIComponent(challenge.realm)
+        + '&nonce=' + encodeURIComponent(challenge.nonce)
+        + '&response=' + resp + '&qop=' + challenge.qop
+        + '&cnonce=' + cnonce + '&temp=asr',
+      auth: 'Digest username="' + cfg.user + '", realm="' + challenge.realm + '"'
+        + ', nonce="' + challenge.nonce + '", uri="/cgi/xml_action.cgi"'
+        + ', response="' + authResp + '", qop=' + challenge.qop
+        + ', nc=' + nc + ', cnonce="' + cnonce + '"',
+    };
   }
 
   /** 数据请求的 Authorization 头 (uri 固定 /cgi/xml_action.cgi, nc 递增) */
@@ -615,7 +633,7 @@ const md5 = hex_md5;
   }
 
   return {
-    md5, parseChallenge, loginUrl, authHeader, parseXml, txt,
+    md5, parseChallenge, loginRequest, authHeader, parseXml, txt,
     uniDecode, uniEncode, xmlEsc, sec2hms, signalBars, NET_MODES,
     buildStatus, buildTraffic, buildDevices, buildSimInfo, buildBandInfo, bandCurrentFromXml,
     buildSetXml, buildRemoteTraffic, SIM_SLOTS,

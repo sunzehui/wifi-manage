@@ -345,13 +345,22 @@ let lastRestRender = 0;   // 非网速区块降频: 每 30s 才随轮询刷新�
  *   - 首次运行用基准点 09:00 / 75% 打底, 之后随真实采样累积;
  *   - 电量回升(充过电)时结束本轮, 把算出的速率存档, 充电期间用它估算;
  *   - 采样只保留最近 24 小时, 最多 240 个点。
+ *
+ * 基准点会失效 —— 它只是"某个时刻电量是 75%"这一个事实, 不能跨充电周期用:
+ *   设备充过电后又回到 75%, 若继续拿上午的基准算, 会得出"6.9 小时只掉 1%"、
+ *   进而算出几百小时的荒谬续航。所以基准带两个作废条件(见 battUpdate)。
  */
-const BATT_RUN = 'batt_run';        // 本轮放电采样 [{t,p}]
+const BATT_RUN = 'batt_run';        // 本轮放电采样 [{t,p,s?}]
 const BATT_LAST = 'batt_last';      // 上一次有效放电速率 {rate,t}
 const BATT_SEEDED = 'batt_seeded';  // 基准点是否已打过
 const BATT_SEED_HOUR = 9, BATT_SEED_PCT = 75;   // 基准点: 09:00 电量 75%
 const BATT_KEEP_MS = 864e5;                     // 只保留 24 小时内的样本
 const BATT_SAMPLE_GAP = 3e5;                    // 电量没变时最多每 5 分钟补一个样本
+const BATT_SEED_MAX_AGE = 12 * 36e5;            // 基准点最多信 12 小时
+const BATT_SEED_STALE = 2 * 36e5;               // 2 小时后电量还没降 → 判定中途充过电
+// 参考放电速率: 这台机器实测 09:00 75% → 14:37 30% (45% / 5.62h)。
+// 只在既没有本轮样本、也没有历史速率时用, 让新装/刚充完电也有个量级, 界面上会标明"参考"。
+const BATT_REF_RATE = 8.0;
 
 function battRead(k, dft) {
   try { const v = JSON.parse(localStorage.getItem(k)); return v == null ? dft : v; }
@@ -361,13 +370,16 @@ function battWrite(k, v) {
   try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* 隐私模式忽略 */ }
 }
 
-/** 由样本序列算平均放电速率 (%/小时), 数据不足返回 0 */
+/** 由样本序列算平均放电速率 (%/小时), 数据不足返回 0
+ *  至少 1 小时的区间才作数: 电量按 1% 跳变, 10 分钟窗口只能给出 6%/时的假精度
+ *  (真值可能是 2%/时, 也可能是 20%/时), 这种数字比"估算中"更误导。
+ */
 function battRate(run) {
   if (!run || run.length < 2) return 0;
   const a = run[0], b = run[run.length - 1];
   const hours = (b.t - a.t) / 36e5;
   const drained = a.p - b.p;
-  if (hours <= 0.05 || drained <= 0) return 0;
+  if (hours < 1 || drained <= 0) return 0;
   return drained / hours;
 }
 
@@ -378,14 +390,35 @@ function battUpdate(percent, charging) {
     .filter(x => x && typeof x.p === 'number' && now - x.t < BATT_KEEP_MS);
   const lastStored = battRead(BATT_LAST, null);
 
-  // 首次运行: 用给定基准点打底 (09:00 / 75%)
+  // 一次性迁移: 旧版本写入的基准没有 s 标记, 而那时的基准会跨充电周期沿用,
+  // 数据语义不可靠 —— 直接作废重来, 并把标记改成 retired 免得又按 09:00 打一次。
+  // 判据必须是严格 === true: 旧版写的就是 true, 而作废后会写成 'retired',
+  // 否则每轮都会把新采样当成"旧基准"清掉。
+  if (run.length && run[0].s === undefined && battRead(BATT_SEEDED, false) === true) {
+    run = [];
+    battWrite(BATT_RUN, []);
+    battWrite(BATT_SEEDED, 'retired');
+  }
+
+  // 首次运行: 用给定基准点打底 (09:00 / 75%), 但只认 12 小时以内的
   if (!run.length && !battRead(BATT_SEEDED, false) && !lastStored) {
     const seed = new Date();
     seed.setHours(BATT_SEED_HOUR, 0, 0, 0);
-    if (now > seed.getTime()) {
-      run = [{ t: seed.getTime(), p: BATT_SEED_PCT }];
+    if (now > seed.getTime() && now - seed.getTime() <= BATT_SEED_MAX_AGE) {
+      run = [{ t: seed.getTime(), p: BATT_SEED_PCT, s: 1 }];
       battWrite(BATT_SEEDED, true);
     }
+  }
+
+  // 基准点作废: ①正在充电 → 放电周期已结束; ②过了 2 小时电量仍不低于基准值
+  // → 中途充过电, 时间跨度不再可信 (继续用会算出几百小时的续航)
+  // 注意判据只看首元素是否为基准: 基准后面可能已被追加过"电量未变"的采样点,
+  // 用 run.length === 1 判断会漏 (实测: 09:00 的基准一直留到 16:00, 算出 420 分钟窗口)。
+  if (run.length && run[0].s &&
+      (charging || (percent >= run[0].p && now - run[0].t > BATT_SEED_STALE))) {
+    run = [];
+    battWrite(BATT_RUN, []);
+    battWrite(BATT_SEEDED, 'retired');   // 基准已作废, 不再重新打
   }
 
   if (charging) {
@@ -393,7 +426,9 @@ function battUpdate(percent, charging) {
     const r = battRate(run);
     if (r) battWrite(BATT_LAST, { rate: r, t: now });
     battWrite(BATT_RUN, []);            // 本轮放电结束
-    return { charging: true, rate: r || (lastStored ? lastStored.rate : 0) };
+    const stored = lastStored && now - lastStored.t < BATT_KEEP_MS / 2 ? lastStored.rate : 0;
+    return { charging: true, fresh: false, ref: !r && !stored,
+             rate: r || stored || BATT_REF_RATE, mins: 0 };
   }
 
   const prev = run[run.length - 1];
@@ -407,7 +442,15 @@ function battUpdate(percent, charging) {
   if (percent < tail.p || now - tail.t > BATT_SAMPLE_GAP) run.push({ t: now, p: percent });
   battWrite(BATT_RUN, run.slice(-240));
 
-  return { charging: false, rate: battRate(run) || (lastStored ? lastStored.rate : 0) };
+  const r = battRate(run);
+  const stored = lastStored && now - lastStored.t < BATT_KEEP_MS / 2 ? lastStored.rate : 0;
+  return {
+    charging: false,
+    fresh: !!r,                         // 速率来自本轮实测
+    ref: !r && !stored,                 // 纯参考值（本轮样本和历史速率都没有）
+    rate: r || stored || BATT_REF_RATE,
+    mins: Math.round((now - run[0].t) / 6e4),
+  };
 }
 
 function fmtDur(h) {
@@ -423,12 +466,17 @@ function fmtDur(h) {
 
 function battEta(percent, charging) {
   const st = battUpdate(percent, charging);
-  if (!st.rate) return { v: '估算中', k: '需累积放电数据' };
+  if (!st.rate) {
+    const waited = st.mins >= 1 ? `已采 ${st.mins} 分, 需满 1 小时` : '需累积放电数据';
+    return { v: '估算中', k: waited };
+  }
   const rate = st.rate.toFixed(1);
-  return {
-    v: '约 ' + fmtDur(percent / st.rate),
-    k: (st.charging ? '充电中 · ' : '耗电 ') + rate + ' %/时',
-  };
+  let note;
+  if (st.charging) note = '充电中 · ' + rate + ' %/时';
+  else if (st.fresh) note = '耗电 ' + rate + ' %/时';
+  else if (st.ref) note = '参考 ' + rate + ' %/时' + (st.mins >= 1 ? ` · 已采 ${st.mins} 分` : '');
+  else note = '沿用上次 ' + rate + ' %/时';
+  return { v: '约 ' + fmtDur(percent / st.rate), k: note };
 }
 
 function renderBatteryEta(percent, charging) {

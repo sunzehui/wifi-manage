@@ -1,5 +1,5 @@
 #!/bin/bash
-# 离线构建 APK (无需 Gradle): aapt2 + javac + d8 + zipalign + apksigner
+# 离线构建 APK (无需 Gradle): aapt2 + kotlinc + d8 + zipalign + apksigner
 # 产物: 随身WiFi仪表盘.apk
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -44,8 +44,10 @@ for c in "${KOTLIN_HOME:-}/bin/kotlinc" \
 done
 if [ -z "$KOTLINC" ]; then
   echo "错误: 找不到 kotlinc。请安装 Kotlin 编译器后重试:" >&2
-  echo "  curl -L -o /tmp/k.zip https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip" >&2
+  echo "  curl -L -o /tmp/k.zip https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip" >&2
   echo "  mkdir -p ~/.local/share && unzip -q /tmp/k.zip -d ~/.local/share" >&2
+  echo "注意: 请用 2.0.x。2.1+ 的 kotlin.Metadata 版本高于 build-tools 35 内置 R8 的" >&2
+  echo "      识别上限(2.0.0)，d8 会对 stdlib 每个类刷一条警告。" >&2
   exit 1
 fi
 KOTLIN_HOME_RESOLVED="$(cd "$(dirname "$KOTLINC")/.." && pwd)"
