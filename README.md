@@ -112,7 +112,7 @@ macOS 可直接双击 `启动仪表盘.command`（需先创建 config.local.php�
 
 | 页面 | 数据接口 | 刷新 | 说明 |
 |---|---|---|---|
-| `/` 首页 | `/api/status`（status1） | 网速区块 5s · 其他区块 30s | 设备状态、信号、电量、实时速率曲线、WiFi 管理（改名/改密码/开关）、SIM 卡槽切换、频段锁定、设备信息 |
+| `/` 首页 | `/api/status`（status1） | 网速区块 5s · 其他区块 30s | 设备状态、信号、电量、实时速率曲线、WiFi 管理（名称与密码合并修改/空闲自动关闭）、SIM 卡槽切换、频段锁定、设备信息、设备操作（重启/关机） |
 | `/traffic` 流量 | `/api/traffic`（statistics） | 手动（进入时加载一次） | 本月/累计流量、**套餐总量与剩余**（进度条、剩余、占比、超出提示）、连接时长；**套餐流量卡**（发卡平台总流量/已用/剩余，手动刷新）；入口在首页流量卡片 |
 | `/devices` 设备 | `/api/devices`（device_management） | 手动（进入时加载一次） | 连接设备表格/卡片、搜索筛选、单设备流量明细；入口在首页设备卡片 |
 
@@ -153,7 +153,19 @@ macOS 可直接双击 `启动仪表盘.command`（需先创建 config.local.php�
   写入设备原生 `total_available_month` 字段（与设备后台「流量管理」同一设置），剩余 = 总量 − 设备统计已用
 - `GET /api/remote-traffic` — 发卡平台套餐流量查询（`?refresh=1` 强制刷新，默认 120s 缓存），
   需在 config.local.php 配置 `mgx_card`；进入流量页加载一次，手动刷新，不轮询
-- `POST /api/wifi` — `{action: ssid|password|toggle, ...}` WiFi 设置，复用设备原厂 set 接口
+- `GET /api/wifi` — 无线基础配置：目前只取「空闲关闭无线」（`wifi_sleep_time`，`0`=关闭，`10~60`=分钟）
+- `POST /api/wifi` — `{action: security|autooff, ...}` WiFi 设置，复用设备原厂 set 接口。
+  `security` 一次请求同时写名称与密码（可只改其一，不改密码时服务端回填设备原密码，
+  保证 `uapxb_wlan_security_settings` 档案完整、无线只重启一次）。
+  另有 `{action: 'toggle', enable: '0'|'1'}` 可写 `wlan_enable`，但**必须显式给字符串 `'0'`/`'1'`**，
+  缺失或其它值一律拒绝（不做「取反」也不给默认值）—— 关掉无线后没有任何远程回滚手段。
+  首页已不提供这个入口，保留接口仅供明确知道后果的脚本调用。
+- `POST /api/router` — `{action: reboot|poweroff, confirm?}` 整机重启 / 关机。
+  与上面所有 set 命令不同，这两个动作**不写任何配置字段**：原厂固件是靠 `method=get` 取一个
+  action 文件来触发的（`file=reset` / `file=power_off`，见设备端 `js/panel/router/*_router.js`），
+  取到这个文件即执行。因此响应里没有 `<RGW>`、也没有可回填的结果，只能按「认证是否通过」判断
+  成败；设备执行时先断开连接属于预期现象，不作失败处理。
+  `poweroff` 必须显式带 `confirm: true`（服务端硬拦），因为关机后只能按机身电源键开机。
 
 所有 set 命令均带 `<?xml version="1.0" encoding="US-ASCII"?>` 声明头（与原厂
 getXMLDocToString 一致，缺它设备会报 `CGI parse error`），并把设备错误响应
@@ -202,7 +214,8 @@ docker run --rm -v "$PWD":/app php:8.4 php /app/tests/digest_vectors.php
 2. 读数据：带 `Authorization: Digest`（uri 为 `/cgi/xml_action.cgi`，nc 递增）请求
    `xml_action.cgi?method=get&module=duster&file=status1|statistics|device_management`。
 3. 写设置：`method=set` 通道下发 `uapxb_wlan_security_settings`（SSID 十六进制 UTF-16 编码 /
-   按当前加密模式节点写 key）和 `uapxb_wlan_basic_settings`（wlan_enable 开关）。
+   按当前加密模式节点写 key）和 `uapxb_wlan_basic_settings`（`wlan_enable` 开关、
+   `wifi_sleep_time` + `wifi_sleep_action=1` 空闲自动关闭，后者两个字段必须一起发才生效）。
 4. 字段换算与原厂后台一致：LTE 时 RSRP=-140+raw dBm、RSRQ=-19.5+raw/2 dB、
    RSSI=-110+raw dBm；电量百分比取 `Battery_voltage`；SSID 为 UTF-16 十六进制编码。
 
@@ -224,3 +237,14 @@ docker run --rm -v "$PWD":/app php:8.4 php /app/tests/digest_vectors.php
 - 设备后台本身：<http://192.168.1.1/> （页面右上角有直达链接）
 - 若页面提示"设备不可达"，说明电脑当前不在随身 WiFi 的网络里。
 - WiFi 改名/改密码会使设备无线网络短暂重启，所有连接设备需要重连，页面弹窗中已提示。
+- 「空闲关闭无线」是设备自带功能（原厂无线设置页的 `wifi_sleep_time`）：开着时设备空闲 N 分钟会
+  自己关掉无线，**之后就再也连不回来**（AP 消失，只能到设备上手动打开）。首页可以查看和修改，
+  建议保持「不自动关闭」。
+- 因此首页**不提供「关闭 WiFi」按钮**：关掉无线 = 本页面、APK、所有远程入口同时失联，且没有任何
+  软件手段能把它重新打开（写 `wlan_enable=1` 的请求也得走这条已经没有的链路）。卡里只显示状态，
+  下方有一行说明。要省电请用「空闲自动关闭」，不要手动关。
+- 「设备操作」里的两项按原厂固件的方式触发（`file=reset` / `file=power_off`，method=get）：
+  - **重启**会断开约 1 分钟，页面进入「设备正在重启」状态，恢复后自动收起。由于设备对不认识的文件
+    也返回 200 空响应，页面用「它是否真的掉线过」来确认指令生效，没观察到就如实提示可能不支持。
+  - **关机**是不可远程撤销的操作（整机断电，只能长按机身电源键开机），所以是红色弹层 + 勾选确认，
+    且服务端要求 `confirm: true`；关机后页面停在「设备已关机」，点「我已开机」才恢复正常轮询。

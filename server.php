@@ -356,6 +356,36 @@ final class MifiSession
         }
         throw new LogicException('unreachable');
     }
+    /**
+     * 整机动作 (重启 / 关机): 原厂靠 GET 一个 action 文件触发 (file=reset / power_off),
+     * 响应里不一定有 <RGW> 骨架, 所以不能走 fetchXml。
+     * 只把「认证被拒」当失败 —— 设备执行动作时常常先把连接断掉, 那属于预期现象。
+     */
+    public function triggerAction(string $file): void
+    {
+        if (!$this->hasSession()) {
+            $this->login();
+        }
+        $path = "/xml_action.cgi?method=get&module=duster&file={$file}"
+            . '&_=' . (int) (microtime(true) * 1000);
+        try {
+            [$body, $headers] = $this->httpGet($path, $this->authHeader('GET'), 15);
+        } catch (Throwable $e) {
+            return;   // 请求已发出, 设备先行断开
+        }
+        if (!str_contains($body, 'UNAUTHORIZED') && !isset($headers['WWW-Authenticate'])) {
+            return;
+        }
+        $this->login();   // 会话过期: 重登一次再发, 这是唯一"没发出去"的情况
+        try {
+            [$body, $headers] = $this->httpGet($path, $this->authHeader('GET'), 15);
+        } catch (Throwable $e) {
+            return;
+        }
+        if (str_contains($body, 'UNAUTHORIZED') || isset($headers['WWW-Authenticate'])) {
+            throw new RuntimeException('设备拒绝了请求，请稍后重试');
+        }
+    }
 }
 
 /* ===================== 数据缓存 (原始 XML, 多 worker 共享) ===================== */
@@ -582,6 +612,20 @@ function buildStatus(string $statusXml): array
     ];
 }
 
+/** 无线基础配置 (uapxb_wlan_basic_settings): 目前只取「无客户端自动关闭」
+ *  字段 wifi_sleep_time: '0' = 关闭该功能, 10~60 = 空闲多少分钟后自动关闭无线
+ *  status1 里没有这个字段, 必须单独读这个文件 (与原厂无线设置页同源) */
+function buildWlanBasic(string $xml): array
+{
+    $ws = sxe($xml)->wlan_settings ?? null;
+    $raw = $ws !== null ? txt($ws, 'wifi_sleep_time') : '';
+    $known = $raw !== '' && preg_match('/^\d+$/', $raw) === 1;
+    $n = $known ? (int) $raw : 0;
+    return [
+        'autoOff' => ['minutes' => $known ? $n : null, 'enabled' => $known ? $n > 0 : null],
+    ];
+}
+
 /** 流量页数据 (statistics); 时长字段优先复用较新的 status1 缓存 */
 function buildTraffic(string $statsXml, ?string $freshStatusXml = null): array
 {
@@ -697,7 +741,8 @@ function uniEncode(string $s): string
     foreach (mb_str_split($s) as $ch) {
         $out .= sprintf('%04x', mb_ord($ch, 'UTF-8'));
     }
-    return $out;
+    // 设备自己返回的 ssid 是大写十六进制, 这里对齐
+    return strtoupper($out);
 }
 
 function wifiAction(array $in): array
@@ -732,15 +777,106 @@ function wifiAction(array $in): array
             $s->postXml('uapxb_wlan_security_settings', $xml);
             return ['ok' => true, 'message' => 'WiFi 密码已更新，请用新密码重新连接'];
 
+        case 'security':
+            // 名称 + 密码一条请求写完 (同一文件), 设备只重启一次无线
+            $ssid  = trim((string) ($in['ssid'] ?? ''));
+            $pwdIn = isset($in['password']) ? (string) $in['password'] : '';
+            if ($ssid === '') {
+                throw new RuntimeException('WiFi 名称不能为空');
+            }
+            if (strlen($ssid) > 32) {
+                throw new RuntimeException('WiFi 名称需为 1-32 字节（1 个汉字占 3 字节）');
+            }
+            if ($pwdIn !== '' && !preg_match('/^[\x20-\x7e]{8,63}$/', $pwdIn)) {
+                throw new RuntimeException('密码需为 8-63 位字符，且不含中文或空格');
+            }
+            // 设备里 wlan_security 按加密模式分块存 key: 改名要把原密码一起带上, 保证档案完整
+            $cur  = sxe($s->fetchXml('uapxb_wlan_security_settings'));
+            $mode = trim((string) ($cur->wlan_security->mode ?? ''));
+            $node = preg_replace('/[^A-Za-z0-9-]/', '', $mode);
+            $encOn = $node !== '' && $mode !== 'None';
+            if ($pwdIn !== '' && !$encOn) {
+                throw new RuntimeException('当前 WiFi 未启用加密，请先在设备后台设置加密方式');
+            }
+            $password = $pwdIn !== '' ? $pwdIn : ($encOn ? (string) ($cur->wlan_security->{$node}->key ?? '') : '');
+            $renamed  = $ssid !== uniDecode((string) ($cur->wlan_security->ssid ?? ''));
+            if (!$renamed && $pwdIn === '') {
+                return ['ok' => true, 'unchanged' => true, 'message' => '名称和密码都没有改动'];
+            }
+            $xml = '<RGW><wlan_security><ssid>' . uniEncode($ssid) . '</ssid>';
+            if ($encOn && $password !== '') {
+                $xml .= "<mode>{$node}</mode><{$node}><key>" . xmlEsc($password) . "</key></{$node}>";
+            }
+            $xml .= '</wlan_security></RGW>';
+            $s->postXml('uapxb_wlan_security_settings', $xml);
+            DataCache::clear(['status1', 'uapxb_wlan_security_settings']);
+            if ($pwdIn !== '') {
+                return ['ok' => true, 'message' => $renamed
+                    ? 'WiFi 名称和密码已更新，请用新的名称和密码重新连接'
+                    : 'WiFi 密码已更新，请用新密码重新连接'];
+            }
+            return ['ok' => true, 'message' => 'WiFi 名称已更新，设备无线将短暂重启'];
+
         case 'toggle':
-            $enable = ($in['enable'] ?? '') === '1' ? '1' : '0';
+            // 只接受显式 '0' / '1'。不做"取反"也不给默认值: 关掉无线后无法远程回滚,
+            // 早前 UI 用 wifi.enabled 反推, status 缺失时会"想关反而开了"。
+            $enable = $in['enable'] ?? null;
+            if ($enable !== '0' && $enable !== '1') {
+                throw new RuntimeException('toggle 需要显式 enable="0"（关闭）或 "1"（开启）');
+            }
             $xml = "<RGW><wlan_settings><wlan_enable>{$enable}</wlan_enable></wlan_settings></RGW>";
             $s->postXml('uapxb_wlan_basic_settings', $xml);
             DataCache::clear(['status1']);
             return ['ok' => true, 'message' => $enable === '1' ? 'WiFi 已开启' : 'WiFi 已关闭'];
+
+        case 'autooff':
+            // 0 = 关闭「无客户端自动关闭」; 10~60 = 空闲多少分钟后自动关无线 (与原厂校验一致)
+            $minutes = (int) ($in['minutes'] ?? -1);
+            if (!($minutes === 0 || ($minutes >= 10 && $minutes <= 60))) {
+                throw new RuntimeException('自动关闭时间需为 10 - 60 分钟，或设为关闭');
+            }
+            // 与原厂 SetWifiSleepTime 一致: wifi_sleep_action=1 是"立即生效"标志, 少发它写入不生效
+            $xml = "<RGW><wlan_settings><wifi_sleep_time>{$minutes}</wifi_sleep_time>"
+                 . "<wifi_sleep_action>1</wifi_sleep_action></wlan_settings></RGW>";
+            $s->postXml('uapxb_wlan_basic_settings', $xml);
+            DataCache::clear(['uapxb_wlan_basic_settings']);
+            return ['ok' => true, 'message' => $minutes === 0
+                ? '已关闭「无客户端自动关闭」'
+                : "已设为空闲 {$minutes} 分钟后自动关闭无线"];
     }
 
     throw new RuntimeException('不支持的操作');
+}
+
+/* ===================== 整机动作: 重启 / 关闭设备 =====================
+ * 原厂「路由器」页签里的两项 (xml/ui_mifi.xml):
+ *     mReboot         -> file=reset       (重启路由器)
+ *     mPowerOffRouter -> file=power_off   (关闭路由器, 仅 devicetype=MIFI 才显示)
+ * 触发方式是 GET 一下这个文件, 不带 XML body。关机后设备彻底断电, 只能按电源键开机。
+ */
+const DEVICE_ACTIONS = ['reboot' => 'reset', 'poweroff' => 'power_off'];
+
+function routerAction(array $in): array
+{
+    $kind = (string) ($in['action'] ?? '');
+    if (!isset(DEVICE_ACTIONS[$kind])) {
+        throw new RuntimeException('不支持的操作');
+    }
+    // 关机之后只能按机身电源键开机, 服务端再拦一道, 避免误调或脚本扫到就直接关机
+    if ($kind === 'poweroff' && ($in['confirm'] ?? null) !== true) {
+        throw new RuntimeException('关闭设备需要显式确认');
+    }
+
+    MifiSession::i()->triggerAction(DEVICE_ACTIONS[$kind]);
+    DataCache::clear(['status1', 'statistics', 'device_management', 'uapxb_wlan_basic_settings']);
+
+    return [
+        'ok'      => true,
+        'action'  => $kind,
+        'message' => $kind === 'reboot'
+            ? '重启指令已发出，设备正在重启（约 1 分钟恢复）'
+            : '关机指令已发出。设备已断电，需长按机身上的电源键才能重新开机',
+    ];
 }
 
 /* ===================== SIM 卡设置 (esim 卡槽切换, 与原厂「eSIM」页同源) ===================== */
@@ -848,6 +984,13 @@ function apiBandInfo(): array
         'masks'   => ['h' => $setH, 'l' => $setL, 'ext' => $setE],
         'current' => $current,
     ];
+}
+
+/** 无线基础配置: 无客户端自动关闭 (status1 里没有该字段, 单独读一次, 20s 缓存足够) */
+function apiWlanBasic(): array
+{
+    $xmls = fetchSources(['uapxb_wlan_basic_settings' => 20.0]);
+    return buildWlanBasic($xmls['uapxb_wlan_basic_settings']);
 }
 
 function bandAction(array $in): array
@@ -1148,15 +1291,37 @@ if ($uri === '/api/band') {
         return jsonOut(['error' => $e->getMessage()], 502);
     }
 }
-if ($uri === '/api/wifi' && $method === 'POST') {
-    $in = json_decode((string) file_get_contents('php://input'), true);
-    if (!is_array($in)) {
-        return jsonOut(['ok' => false, 'error' => '请求格式错误'], 400);
+if ($uri === '/api/router') {
+    if ($method === 'POST') {
+        $in = json_decode((string) file_get_contents('php://input'), true);
+        if (!is_array($in)) {
+            return jsonOut(['ok' => false, 'error' => '请求格式错误'], 400);
+        }
+        try {
+            return jsonOut(routerAction($in));
+        } catch (Throwable $e) {
+            return jsonOut(['ok' => false, 'error' => $e->getMessage()], 400);
+        }
+    }
+    return jsonOut(['ok' => false, 'error' => '请用 POST 调用'], 405);
+}
+
+if ($uri === '/api/wifi') {
+    if ($method === 'POST') {
+        $in = json_decode((string) file_get_contents('php://input'), true);
+        if (!is_array($in)) {
+            return jsonOut(['ok' => false, 'error' => '请求格式错误'], 400);
+        }
+        try {
+            return jsonOut(wifiAction($in));
+        } catch (Throwable $e) {
+            return jsonOut(['ok' => false, 'error' => $e->getMessage()], 400);
+        }
     }
     try {
-        return jsonOut(wifiAction($in));
+        return jsonOut(apiWlanBasic());
     } catch (Throwable $e) {
-        return jsonOut(['ok' => false, 'error' => $e->getMessage()], 400);
+        return jsonOut(['error' => $e->getMessage()], 502);
     }
 }
 

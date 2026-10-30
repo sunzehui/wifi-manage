@@ -149,8 +149,30 @@ async function postXml(file, xml) {
   }
 }
 
-/* ---------------- 缓存 ---------------- */
+/* 整机动作 (重启/关机): 原厂用 method=get 取一个 action 文件来触发, 响应里不一定有 <RGW>,
+ * 所以不能复用 fetchXml (它要求 RGW 骨架)。只把「认证被拒」当失败 ——
+ * 设备执行动作时常常先把连接断掉, 那个 curl 错误是预期现象, 报成失败只会让用户反复点。
+ */
+async function triggerDeviceAction(file) {
+  if (!session.nonce) await login();          // 设备不可达 / 密码错在这一步就会抛出
+  const url = `${CFG.host}/xml_action.cgi?method=get&module=duster&file=${file}&_=${Date.now()}`;
+  let r;
+  try {
+    r = await rawGet(url, authHeader('GET'), 15);
+  } catch (e) {
+    return { dropped: true };                 // 请求已发出, 设备先行断开
+  }
+  const denied = AUTH_FAIL.test(r.body) || !!r.wwwAuth;
+  if (denied) {
+    await login();                            // 会话过期: 重登一次再发, 这是唯一"没发出去"的情况
+    const r2 = await rawGet(url, authHeader('GET'), 15).catch(() => null);
+    if (!r2) return { dropped: true };
+    if (AUTH_FAIL.test(r2.body) || r2.wwwAuth) throw new Error('设备拒绝了请求，请稍后重试');
+  }
+  return { dropped: false };
+}
 
+/* ---------------- 缓存 ---------------- */
 const cache = new Map();   // file -> {xml, ts}
 function cacheGet(file, ttlSec) {
   const e = cache.get(file);
@@ -206,6 +228,10 @@ const apiSimInfo = async () => {
 
 const apiBandInfo = async () => core.buildBandInfo((await fetchSources({ customconfig: 5 })).customconfig);
 
+// 无线基础配置: 无客户端自动关闭 (status1 里没有该字段, 单独读一次, 20s 缓存足够)
+const apiWlanBasic = async () =>
+  core.buildWlanBasic((await fetchSources({ uapxb_wlan_basic_settings: 20 })).uapxb_wlan_basic_settings);
+
 async function apiRemoteTraffic(refresh) {
   if (!CFG.mgxCard) throw new Error('未配置发卡平台设备号: 请在 config.local.json 增加 "mgx_card" 或设置环境变量 WIFI_MGX_CARD');
   if (!refresh) {
@@ -252,15 +278,75 @@ async function wifiAction(input) {
       await postXml(file, xml);
       return { ok: true, message: 'WiFi 密码已更新，请用新密码重新连接' };
     }
+    case 'security': {
+      // 名称 + 密码一条请求写完 (同一文件), 设备只重启一次无线 —— 分两次写会让设备断两次。
+      const ssid = String(input.ssid || '').trim();
+      const pwdIn = input.password == null ? '' : String(input.password);
+      if (!ssid) throw new Error('WiFi 名称不能为空');
+      if (Buffer.byteLength(ssid, 'utf8') > 32) throw new Error('WiFi 名称需为 1-32 字节（1 个汉字占 3 字节）');
+      if (pwdIn && !/^[\x20-\x7e]{8,63}$/.test(pwdIn)) throw new Error('密码需为 8-63 位字符，且不含中文或空格');
+
+      // 读当前档案: 设备里 wlan_security 是按加密模式分块存 key 的, 改名时必须把原密码一起带上,
+      // 否则这条请求里的 wlan_security 只有 ssid, 有把密码块冲掉的风险
+      const sec = (core.parseXml(await fetchXml('uapxb_wlan_security_settings')).RGW || {}).wlan_security || {};
+      const mode = String(sec.mode || '').trim();
+      const encMode = mode.replace(/[^A-Za-z0-9-]/g, '');
+      const encOn = !!encMode && mode !== 'None';
+      if (pwdIn && !encOn) throw new Error('当前 WiFi 未启用加密，请先在设备后台设置加密方式');
+
+      const password = pwdIn || (encOn ? String((sec[encMode] || {}).key || '') : '');
+      const renamed = ssid !== core.uniDecode(String(sec.ssid || ''));
+      if (!renamed && !pwdIn) return { ok: true, unchanged: true, message: '名称和密码都没有改动' };
+
+      const { file, xml } = core.buildSetXml('security', { ssid, mode: encMode, password });
+      await postXml(file, xml);
+      cacheClear(['status1', 'uapxb_wlan_security_settings']);
+
+      if (pwdIn) return { ok: true, message: `WiFi ${renamed ? '名称和密码' : '密码'}已更新，请用${renamed ? '新的名称和密码' : '新密码'}重新连接` };
+      return { ok: true, message: 'WiFi 名称已更新，设备无线将短暂重启' };
+    }
     case 'toggle': {
-      const enable = input.enable === '1' ? '1' : '0';
-      const { file, xml } = core.buildSetXml('toggle', { enable });
+      // 只接受显式 '0' / '1'; 校验在 core.buildSetXml 里, 由它统一抛错
+      const { file, xml } = core.buildSetXml('toggle', { enable: input.enable });
       await postXml(file, xml);
       cacheClear(['status1']);
-      return { ok: true, message: enable === '1' ? 'WiFi 已开启' : 'WiFi 已关闭' };
+      return { ok: true, message: input.enable === '1' ? 'WiFi 已开启' : 'WiFi 已关闭' };
+    }
+    case 'autooff': {
+      // 0 = 关闭「无客户端自动关闭」; 10~60 = 空闲多少分钟后自动关无线 (与原厂校验一致)
+      const minutes = parseInt(input.minutes, 10);
+      if (!(minutes === 0 || (minutes >= 10 && minutes <= 60)))
+        throw new Error('自动关闭时间需为 10 - 60 分钟，或设为关闭');
+      const { file, xml } = core.buildSetXml('autooff', { minutes });
+      await postXml(file, xml);
+      cacheClear(['uapxb_wlan_basic_settings']);
+      return {
+        ok: true,
+        message: minutes === 0 ? '已关闭「无客户端自动关闭」' : `已设为空闲 ${minutes} 分钟后自动关闭无线`,
+      };
     }
   }
   throw new Error('不支持的操作');
+}
+
+/* 整机动作: 重启 / 关闭设备 (原厂 file=reset / power_off) */
+async function routerAction(input) {
+  const kind = String(input.action || '');
+  const act = core.buildDeviceAction(kind);   // 非法值在这里抛「不支持的操作」
+
+  // 关闭设备之后只能按机身上的电源键开机, 服务端再拦一道, 避免误调/脚本扫到就直接关机
+  if (kind === 'poweroff' && input.confirm !== true) throw new Error('关闭设备需要显式确认');
+
+  const { dropped } = await triggerDeviceAction(act.file);
+  cache.clear();                              // 设备即将重启/断电, 缓存的 XML 全部作废
+  return {
+    ok: true,
+    action: kind,
+    dropped,
+    message: kind === 'reboot'
+      ? '重启指令已发出，设备正在重启（约 1 分钟恢复）'
+      : '关机指令已发出。设备已断电，需长按机身上的电源键才能重新开机',
+  };
 }
 
 async function simAction(input) {
@@ -365,11 +451,13 @@ const server = http.createServer(async (req, res) => {
       if (uri === '/api/summary') return jsonOut(res, 200, await apiSummary());
       if (uri === '/api/sim' && req.method === 'GET') return jsonOut(res, 200, await apiSimInfo());
       if (uri === '/api/band' && req.method === 'GET') return jsonOut(res, 200, await apiBandInfo());
+      if (uri === '/api/wifi' && req.method === 'GET') return jsonOut(res, 200, await apiWlanBasic());
       if (uri === '/api/remote-traffic') return jsonOut(res, 200, await apiRemoteTraffic(url.searchParams.get('refresh') === '1'));
       if (req.method === 'POST') {
         const body = await readBody(req);
         if (!body) return jsonOut(res, 400, { ok: false, error: '请求格式错误' });
         if (uri === '/api/wifi') return jsonOut(res, 200, await wifiAction(body));
+        if (uri === '/api/router') return jsonOut(res, 200, await routerAction(body));
         if (uri === '/api/sim') return jsonOut(res, 200, await simAction(body));
         if (uri === '/api/band') return jsonOut(res, 200, await bandAction(body));
         if (uri === '/api/traffic/quota') return jsonOut(res, 200, await quotaAction(body));

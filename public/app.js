@@ -152,7 +152,25 @@ function toast(msg, ok) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
 }
+/* ---------- 整机动作(重启/关机)窗口期 ----------
+ * 指令一旦发出, 设备必然失联一段时间。这段窗口里请求失败是预期现象,
+ * 不该弹「设备不可达」错误条 —— 由页面用 setDeviceHold 声明, 进度交给页面自己表达。
+ * ms 不传 = 一直挂到页面主动清除(关机就属于这种: 设备不会自己回来)。
+ */
+let deviceHold = null;   // { kind: 'reboot'|'poweroff', until: number }
+function setDeviceHold(kind, ms) {
+  deviceHold = kind ? { kind, until: ms > 0 ? Date.now() + ms : Infinity } : null;
+}
+function deviceHeld() { return !!(deviceHold && Date.now() < deviceHold.until); }
+
 function showErrorBanner(msg, notify) {
+  if (deviceHeld()) {
+    const pill = $('netPill');
+    pill.className = 'pill bad';
+    $('netPillText').textContent = deviceHold.kind === 'poweroff' ? '已关机' : '重启中';
+    $('banner').classList.remove('show');
+    return;
+  }
   const pill = $('netPill');
   pill.className = 'pill bad';
   $('netPillText').textContent = '设备不可达';
@@ -174,6 +192,8 @@ function startPolling(url, onOk, intervalMs) {
       onOk(await Api.get(url));
       hideErrorBanner();
     } catch (e) {
+      // 页面可借此确认"设备确实掉线过"（重启是否真的执行，只能靠这个观察）
+      if (typeof window.onDeviceDown === 'function') window.onDeviceDown(e);
       // 只有持有 /api/status 轮询的首页能把降级写进通知：它同时负责在恢复后写回真实数字
       showErrorBanner(e.message, url.split('?')[0] === '/api/status');
     }

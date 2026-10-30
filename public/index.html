@@ -52,6 +52,16 @@
 <main class="page">
   <div class="banner" id="banner"></div>
 
+  <!-- 重启 / 关机进行中：设备必然失联一段时间，这里只表达"进展"，不报错 -->
+  <div class="hold" id="holdBar" style="display:none">
+    <div class="hold-ic" id="holdIc">⏳</div>
+    <div class="hold-main">
+      <div class="hold-t" id="holdTitle">设备正在重启</div>
+      <div class="hold-d" id="holdDesc">正在等待设备恢复…</div>
+    </div>
+    <button class="btn" id="holdBtn" style="display:none">我已开机</button>
+  </div>
+
   <!-- 第一屏：设备运行概况（仅依赖 status1） -->
   <section class="grid hero-grid">
     <div class="card">
@@ -117,12 +127,13 @@
         <span class="k">加密方式</span><span class="v" id="wifiSec">--</span>
         <span class="k">信道</span><span class="v" id="wifiCh">--</span>
         <span class="k">已连接设备</span><span class="v" id="wifiDev">--</span>
+        <span class="k">空闲自动关闭</span><span class="v" id="wifiAutoOff">--</span>
       </div>
       <div class="wifi-actions">
-        <button class="btn" id="btnRename">修改名称</button>
-        <button class="btn" id="btnRepass">修改密码</button>
-        <button class="btn danger" id="btnToggle">关闭 WiFi</button>
+        <button class="btn" id="btnEditWifi">修改名称与密码</button>
+        <button class="btn" id="btnAutoOff">自动关闭设置</button>
       </div>
+      <div class="wifi-note">关闭无线会让手机和电脑立刻断开，且没有任何远程方式能再打开，因此这里不提供关闭入口。</div>
     </div>
 
     <div class="card">
@@ -185,6 +196,27 @@
     <div class="entry-arrow">›</div>
   </a>
 
+  <!-- 整机操作：重启 / 关机。关机是"不可远程撤销"的操作，所以放页面最底部，少误触 -->
+  <div class="card">
+    <div class="card-title">设备操作</div>
+    <div class="ops-body">
+      <div class="ops-item">
+        <div class="ops-main">
+          <div class="ops-t">重启设备</div>
+          <div class="ops-d">断开约 1 分钟，之后自动恢复联网。WiFi 名称、密码和各项设置都不变。</div>
+        </div>
+        <button class="btn" id="btnReboot">重启</button>
+      </div>
+      <div class="ops-item danger">
+        <div class="ops-main">
+          <div class="ops-t">关闭设备</div>
+          <div class="ops-d">整机断电，WiFi 和本页同时失联。<b>关机后只能按机身上的电源键开机，远程无法恢复。</b></div>
+        </div>
+        <button class="btn danger" id="btnPowerOff">关闭</button>
+      </div>
+    </div>
+  </div>
+
   <footer>
     <span id="updatedAt">--</span>
     <span>网速每 5 秒刷新 · 其他信息每 30 秒刷新</span>
@@ -192,61 +224,88 @@
   </footer>
 </main>
 
-<!-- 弹层：修改 WiFi 名称 -->
-<div class="overlay" id="ovSsid">
+<!-- 弹层：修改 WiFi 名称与密码（合并成一次保存） -->
+<div class="overlay" id="ovWifi">
   <div class="modal">
-    <h4>修改 WiFi 名称</h4>
-    <div class="desc">当前名称：<b id="mSsidNow">--</b></div>
+    <h4>修改名称与密码</h4>
+    <div class="desc">当前：<b id="mWifiNow">--</b> · 加密方式：<b id="mWifiSec">--</b></div>
     <div class="field">
-      <label for="inSsid">新名称</label>
-      <input id="inSsid" type="text" maxlength="32" autocomplete="off" placeholder="输入新的 WiFi 名称">
-      <div class="err" id="inSsidErr" style="display:none;margin-top:5px;font-size:12px;color:var(--bad)"></div>
+      <label for="inWifiSsid">名称</label>
+      <input id="inWifiSsid" type="text" maxlength="32" autocomplete="off" placeholder="WiFi 名称">
+      <div class="err" id="inWifiSsidErr" style="display:none;margin-top:5px;font-size:12px;color:var(--bad)"></div>
     </div>
-    <div class="desc">修改后设备 WiFi 会短暂重启，已连接的设备需要重新连接。</div>
+    <div class="field">
+      <label for="inWifiPass">新密码</label>
+      <div class="in-row">
+        <input id="inWifiPass" type="password" maxlength="63" autocomplete="new-password" placeholder="留空表示不修改">
+        <button class="btn eye" data-eye="inWifiPass" aria-label="显示或隐藏密码">👁</button>
+      </div>
+      <div class="err" id="inWifiPassErr" style="display:none;margin-top:5px;font-size:12px;color:var(--bad)"></div>
+    </div>
+    <div class="field">
+      <label for="inWifiPass2">确认新密码</label>
+      <div class="in-row">
+        <input id="inWifiPass2" type="password" maxlength="63" autocomplete="new-password" placeholder="再次输入新密码">
+        <button class="btn eye" data-eye="inWifiPass2" aria-label="显示或隐藏密码">👁</button>
+      </div>
+      <div class="err" id="inWifiPass2Err" style="display:none;margin-top:5px;font-size:12px;color:var(--bad)"></div>
+    </div>
+    <div class="desc">保存后设备无线会重启一次，已连接的设备要用新名称 / 密码重新连接；两项一起改也只重启一次。</div>
     <div class="modal-btns">
       <button class="btn" data-close>取消</button>
-      <button class="btn primary" id="doSsid">确认修改</button>
+      <button class="btn primary" id="doWifi">保存</button>
     </div>
   </div>
 </div>
 
-<!-- 弹层：修改 WiFi 密码 -->
-<div class="overlay" id="ovPass">
+<!-- 弹层：无客户端自动关闭 -->
+<div class="overlay" id="ovAutoOff">
   <div class="modal">
-    <h4>修改 WiFi 密码</h4>
-    <div class="desc">WiFi：<b id="mPassSsid">--</b> · 加密方式：<b id="mPassSec">--</b></div>
+    <h4>无客户端自动关闭</h4>
+    <div class="desc">没有设备连着 WiFi 时，设备会自动关掉无线网络来省电。<b>一旦无线被自动关掉，就无法通过本页面重新开启</b>，只能到设备上手动打开。</div>
     <div class="field">
-      <label for="inPass1">新密码</label>
-      <div class="in-row">
-        <input id="inPass1" type="password" maxlength="63" autocomplete="new-password" placeholder="8 - 63 位字符">
-        <button class="btn eye" data-eye="inPass1" aria-label="显示或隐藏密码">👁</button>
-      </div>
-      <div class="err" id="inPass1Err" style="display:none;margin-top:5px;font-size:12px;color:var(--bad)"></div>
+      <label>空闲多久后关闭无线</label>
+      <div class="chips wrap" id="autoOffChips"></div>
     </div>
-    <div class="field">
-      <label for="inPass2">确认新密码</label>
-      <div class="in-row">
-        <input id="inPass2" type="password" maxlength="63" autocomplete="new-password" placeholder="再次输入新密码">
-        <button class="btn eye" data-eye="inPass2" aria-label="显示或隐藏密码">👁</button>
-      </div>
-      <div class="err" id="inPass2Err" style="display:none;margin-top:5px;font-size:12px;color:var(--bad)"></div>
-    </div>
-    <div class="desc">修改后所有设备需要使用新密码重新连接，请牢记新密码。</div>
+    <div class="desc" id="autoOffHint"></div>
     <div class="modal-btns">
       <button class="btn" data-close>取消</button>
-      <button class="btn primary" id="doPass">确认修改</button>
+      <button class="btn primary" id="doAutoOff">确认修改</button>
     </div>
   </div>
 </div>
 
-<!-- 弹层：WiFi 开关确认 -->
-<div class="overlay" id="ovToggle">
+<!-- 弹层：重启设备 -->
+<div class="overlay" id="ovReboot">
   <div class="modal">
-    <h4 id="tgTitle">关闭 WiFi</h4>
-    <div class="desc" id="tgDesc">关闭后所有无线设备将断开连接，且无法通过本页面远程重新开启。确定要关闭吗？</div>
+    <h4>重启设备</h4>
+    <div class="desc">设备会断开约 1 分钟，期间 WiFi 和本页都会失联，恢复后自动重新连上。</div>
+    <div class="desc">WiFi 名称、密码和各项设置不会被改动，已连接的设备需要重新连接一次。</div>
     <div class="modal-btns">
       <button class="btn" data-close>取消</button>
-      <button class="btn danger" id="doToggle">确认关闭</button>
+      <button class="btn primary" id="doReboot">确认重启</button>
+    </div>
+  </div>
+</div>
+
+<!-- 弹层：关闭设备（红色二次确认 + 勾选，因为关掉就回不来了） -->
+<div class="overlay" id="ovPowerOff">
+  <div class="modal">
+    <h4 style="color:var(--bad)">关闭设备</h4>
+    <div class="desc">
+      关闭后设备立即断电：本页、手机、电脑全部失去连接，
+      <b style="color:var(--bad)">没有任何远程方式能把它重新打开</b>。
+    </div>
+    <div class="desc">
+      要重新使用，只能到设备上<b>长按电源键</b>开机。如果你现在不在设备旁边，请不要继续。
+    </div>
+    <div class="field toggle-row">
+      <label for="chkPowerOff">我确认设备就在身边，可以手动开机</label>
+      <input type="checkbox" id="chkPowerOff">
+    </div>
+    <div class="modal-btns">
+      <button class="btn" data-close>取消</button>
+      <button class="btn danger" id="doPowerOff" disabled>确认关闭设备</button>
     </div>
   </div>
 </div>
@@ -556,7 +615,6 @@ function renderRest(d) {
   $('wifiSec').textContent = d.wifi.security || '--';
   $('wifiCh').textContent = d.wifi.channel;
   $('wifiDev').textContent = d.lan.connectedCount + ' 台';
-  $('btnToggle').textContent = d.wifi.enabled ? '关闭 WiFi' : '开启 WiFi';
 
   /* 设备信息卡 */
   $('devModel').textContent = d.device.model;
@@ -621,72 +679,232 @@ function drawChart() {
 bindModals();
 let status = null;
 
-$('btnRename').addEventListener('click', () => {
-  $('mSsidNow').textContent = status?.wifi.ssid || '--';
-  $('inSsid').value = status?.wifi.ssid || '';
-  $('inSsidErr').style.display = 'none';
-  openModal('ovSsid');
-});
-$('btnRepass').addEventListener('click', () => {
-  $('mPassSsid').textContent = status?.wifi.ssid || '--';
-  $('mPassSec').textContent = status?.wifi.security || '--';
-  $('inPass1').value = ''; $('inPass2').value = '';
-  $('inPass1Err').style.display = 'none'; $('inPass2Err').style.display = 'none';
-  openModal('ovPass');
-});
-$('btnToggle').addEventListener('click', () => {
-  const on = status?.wifi.enabled;
-  $('tgTitle').textContent = on ? '关闭 WiFi' : '开启 WiFi';
-  $('tgDesc').textContent = on
-    ? '关闭后所有无线设备将断开连接，且无法通过本页面远程重新开启。确定要关闭吗？'
-    : '开启后设备将恢复无线网络。确定要开启吗？';
-  $('doToggle').textContent = on ? '确认关闭' : '确认开启';
-  openModal('ovToggle');
+$('btnEditWifi').addEventListener('click', () => {
+  $('mWifiNow').textContent = status?.wifi.ssid || '--';
+  $('mWifiSec').textContent = status?.wifi.security || '--';
+  $('inWifiSsid').value = status?.wifi.ssid || '';
+  $('inWifiPass').value = ''; $('inWifiPass2').value = '';
+  ['inWifiSsidErr', 'inWifiPassErr', 'inWifiPass2Err'].forEach(id => { $(id).style.display = 'none'; });
+  openModal('ovWifi');
 });
 
 async function postWifi(payload) {
   return Api.post('/api/wifi', payload);
 }
 
-$('doSsid').addEventListener('click', async () => {
-  const ssid = $('inSsid').value.trim();
-  const err = $('inSsidErr');
-  if (!ssid) { err.textContent = '请输入 WiFi 名称'; err.style.display = 'block'; return; }
-  if (new Blob([ssid]).size > 32) { err.textContent = '名称过长（最多 32 字节，汉字占 3 字节）'; err.style.display = 'block'; return; }
-  err.style.display = 'none';
-  $('doSsid').disabled = true;
+/* 名称与密码合并成一次保存: 同一条请求写同一个文件, 设备只重启一次无线。
+ * 密码留空 = 不改; 服务端会把设备里的原密码回填进这条请求, 保证档案完整。 */
+$('doWifi').addEventListener('click', async () => {
+  const cur = status?.wifi.ssid || '';
+  const ssid = $('inWifiSsid').value.trim();
+  const p1 = $('inWifiPass').value, p2 = $('inWifiPass2').value;
+  const eS = $('inWifiSsidErr'), e1 = $('inWifiPassErr'), e2 = $('inWifiPass2Err');
+  eS.style.display = e1.style.display = e2.style.display = 'none';
+
+  if (!status) { toast('还没读到设备当前信息，请稍后再试', false); return; }
+  if (!ssid) { eS.textContent = '请输入 WiFi 名称'; eS.style.display = 'block'; return; }
+  if (new Blob([ssid]).size > 32) { eS.textContent = '名称过长（最多 32 字节，汉字占 3 字节）'; eS.style.display = 'block'; return; }
+  if (p1) {
+    if (p1.length < 8 || p1.length > 63) { e1.textContent = '密码需为 8 - 63 位字符'; e1.style.display = 'block'; return; }
+    if (p1 !== p2) { e2.textContent = '两次输入的密码不一致'; e2.style.display = 'block'; return; }
+  }
+  if (ssid === cur && !p1) { e1.textContent = '名称没有变化，请输入新密码'; e1.style.display = 'block'; return; }
+
+  $('doWifi').disabled = true;
   try {
-    const j = await postWifi({ action: 'ssid', ssid });
-    toast(j.message || 'WiFi 名称已更新', true);
+    const payload = { action: 'security', ssid };
+    if (p1) payload.password = p1;
+    const j = await postWifi(payload);
     closeModals();
+    toast(j.message || '已保存', true);
   } catch (e) { toast(e.message, false); }
-  $('doSsid').disabled = false;
+  $('doWifi').disabled = false;
 });
 
-$('doPass').addEventListener('click', async () => {
-  const p1 = $('inPass1').value, p2 = $('inPass2').value;
-  const e1 = $('inPass1Err'), e2 = $('inPass2Err');
-  e1.style.display = 'none'; e2.style.display = 'none';
-  if (p1.length < 8 || p1.length > 63) { e1.textContent = '密码需为 8 - 63 位字符'; e1.style.display = 'block'; return; }
-  if (p1 !== p2) { e2.textContent = '两次输入的密码不一致'; e2.style.display = 'block'; return; }
-  $('doPass').disabled = true;
-  try {
-    const j = await postWifi({ action: 'password', password: p1 });
-    toast(j.message || 'WiFi 密码已更新', true);
-    closeModals();
-  } catch (e) { toast(e.message, false); }
-  $('doPass').disabled = false;
+/* ---------- 无客户端自动关闭 ----------
+ * 该值不在 status1 里, 单独读一次 /api/wifi (服务端 20s 缓存), 不进 5s 轮询。
+ * 开启后设备空闲 N 分钟会自己关掉无线, 而关了就连不回来 —— 所以要让用户看见并建议设「不自动关闭」。
+ */
+let autoOff = null;       // /api/wifi 结果; null = 还没取到
+let autoOffPick = null;   // 弹层里待提交的分钟数, 0 = 不自动关闭
+const AUTO_OFF_OPTS = [0, 10, 20, 30, 45, 60];
+
+function autoOffLabel(minutes) {
+  if (minutes == null) return '--';
+  return minutes > 0 ? `${minutes} 分钟` : '已关闭';
+}
+
+function renderAutoOffRow() {
+  $('wifiAutoOff').textContent = autoOffLabel(autoOff?.autoOff.minutes ?? null);
+}
+
+async function loadAutoOff() {
+  try { autoOff = await Api.get('/api/wifi'); } catch (e) { autoOff = null; }
+  renderAutoOffRow();
+}
+
+function renderAutoOffChips() {
+  const box = $('autoOffChips');
+  box.innerHTML = AUTO_OFF_OPTS.map(m =>
+    `<button type="button" class="chip${m === autoOffPick ? ' on' : ''}" data-min="${m}">${m === 0 ? '不自动关闭' : m + ' 分钟'}</button>`).join('');
+  box.querySelectorAll('.chip').forEach(c => c.addEventListener('click', () => {
+    autoOffPick = +c.dataset.min;
+    renderAutoOffChips();
+    renderAutoOffHint();
+  }));
+}
+
+function renderAutoOffHint() {
+  if (autoOffPick == null) { $('autoOffHint').textContent = ''; return; }
+  $('autoOffHint').textContent = autoOffPick === 0
+    ? '推荐：设备始终连着，随时可以连上来。'
+    : `开着它，空闲 ${autoOffPick} 分钟后无线会被自动关掉；那时手机和电脑都连不回来，只能到设备上手动打开。`;
+}
+
+$('btnAutoOff').addEventListener('click', async () => {
+  autoOffPick = autoOff?.autoOff.minutes ?? null;
+  renderAutoOffChips();
+  renderAutoOffHint();
+  openModal('ovAutoOff');
+  if (!autoOff) {                       // 首次或上次没读到: 打开弹层时补一次
+    $('autoOffHint').textContent = '读取当前设置…';
+    await loadAutoOff();
+    if (autoOffPick == null) autoOffPick = autoOff?.autoOff.minutes ?? 0;
+    renderAutoOffChips();
+    renderAutoOffHint();
+  }
 });
 
-$('doToggle').addEventListener('click', async () => {
-  const enable = status?.wifi.enabled ? '0' : '1';
-  $('doToggle').disabled = true;
+$('doAutoOff').addEventListener('click', async () => {
+  if (autoOffPick == null) { toast('请先选择空闲关闭时间', false); return; }
+  if (autoOff?.autoOff.minutes === autoOffPick) { toast('当前已是该设置，无需修改', true); closeModals(); return; }
+  $('doAutoOff').disabled = true;
+  $('doAutoOff').textContent = '提交中…';
   try {
-    const j = await postWifi({ action: 'toggle', enable });
-    toast(j.message || '操作成功', true);
+    const j = await Api.post('/api/wifi', { action: 'autooff', minutes: autoOffPick });
+    toast(j.message || '已保存', true);
     closeModals();
+    await loadAutoOff();
   } catch (e) { toast(e.message, false); }
-  $('doToggle').disabled = false;
+  $('doAutoOff').disabled = false;
+  $('doAutoOff').textContent = '确认修改';
+});
+
+/* ---------- 整机操作: 重启 / 关闭设备 ----------
+ * 两个动作都是「一条指令发出去, 设备就断开」, 所以真实反馈只能等它回来:
+ * 重启 → 每 5s 的轮询会自己发现恢复; 关机 → 设备不会回来, 只能等用户按电源键。
+ * 状态存 localStorage: 这段时间页面可能被刷新或重进, 不能把这件事忘掉。
+ */
+const HOLD_MAX_MS = 5 * 60 * 1000;   // 超过 5 分钟还没回来, 就不再替它"圆场", 恢复普通报错
+let holdTimer = null;
+
+function holdState() {
+  try {
+    const h = JSON.parse(localStorage.getItem('mifi_hold') || 'null');
+    if (!h || !h.kind) return null;
+    if (h.kind === 'reboot' && Date.now() - h.at > HOLD_MAX_MS) return null;
+    return h;
+  } catch (e) { return null; }
+}
+
+function beginHold(kind) {
+  localStorage.setItem('mifi_hold', JSON.stringify({ kind, at: Date.now() }));
+  setDeviceHold(kind, kind === 'reboot' ? HOLD_MAX_MS : 0);
+  renderHold();
+}
+
+function endHold(msg, ok) {
+  const had = !!holdState();
+  localStorage.removeItem('mifi_hold');
+  setDeviceHold(null);
+  renderHold();
+  if (had && msg) toast(msg, ok !== false);
+}
+
+/* 设备掉线过一次 = 重启指令真的被执行了。
+ * 设备对"不认识的 action 文件"也回 200 空响应, 所以不能凭接口返回成功就断言重启,
+ * 只能靠「它确实消失过」来确认; 没消失就如实告诉用户这条指令可能没生效。 */
+window.onDeviceDown = () => {
+  const h = holdState();
+  if (h && h.kind === 'reboot' && !h.sawDown) {
+    h.sawDown = true;
+    localStorage.setItem('mifi_hold', JSON.stringify(h));
+  }
+};
+
+function renderHold() {
+  const h = holdState();
+  const bar = $('holdBar');
+  if (!h) {
+    bar.style.display = 'none';
+    if (holdTimer) { clearInterval(holdTimer); holdTimer = null; }
+    return;
+  }
+  bar.style.display = 'flex';
+  bar.className = 'hold ' + (h.kind === 'poweroff' ? 'bad' : 'warn');
+  // app.js 的窗口期是内存态: 刷新/重进后 holdState 还在, 必须在这里补回去,
+  // 否则「设备不可达」错误条会和状态条一起冒出来。剩余时长由 h.at 推算, 每秒重算不会漂移。
+  setDeviceHold(h.kind, h.kind === 'reboot' ? Math.max(0, HOLD_MAX_MS - (Date.now() - h.at)) : 0);
+  const sec = Math.max(0, Math.round((Date.now() - h.at) / 1000));
+  if (h.kind === 'reboot') {
+    $('holdIc').textContent = '⏳';
+    $('holdTitle').textContent = '设备正在重启';
+    $('holdDesc').textContent = `已用时 ${sec} 秒，通常 60 秒左右恢复；恢复后本页会自动重新读取数据。`;
+    $('holdBtn').style.display = 'none';
+  } else {
+    $('holdIc').textContent = '⏻';
+    $('holdTitle').textContent = '设备已关机';
+    $('holdDesc').textContent = '整机已断电。请长按机身上的电源键开机，开机后点右侧按钮重新连接。';
+    $('holdBtn').style.display = 'inline-flex';
+  }
+  if (!holdTimer) holdTimer = setInterval(renderHold, 1000);
+}
+
+$('btnReboot').addEventListener('click', () => openModal('ovReboot'));
+
+$('btnPowerOff').addEventListener('click', () => {
+  $('chkPowerOff').checked = false;
+  $('doPowerOff').disabled = true;      // 必须手动勾选才解锁
+  openModal('ovPowerOff');
+});
+$('chkPowerOff').addEventListener('change', e => { $('doPowerOff').disabled = !e.target.checked; });
+
+$('doReboot').addEventListener('click', async () => {
+  $('doReboot').disabled = true;
+  $('doReboot').textContent = '提交中…';
+  try {
+    const j = await Api.post('/api/router', { action: 'reboot' });
+    closeModals();
+    beginHold('reboot');
+    toast(j.message || '重启指令已发出', true);
+  } catch (e) { toast(e.message, false); }
+  $('doReboot').disabled = false;
+  $('doReboot').textContent = '确认重启';
+});
+
+$('doPowerOff').addEventListener('click', async () => {
+  if (!$('chkPowerOff').checked) { toast('请先确认设备就在身边', false); return; }
+  $('doPowerOff').disabled = true;
+  $('doPowerOff').textContent = '提交中…';
+  try {
+    const j = await Api.post('/api/router', { action: 'poweroff', confirm: true });
+    closeModals();
+    beginHold('poweroff');
+    Native.clear();                     // 通知栏别继续挂着关机前的旧数据
+    toast(j.message || '关机指令已发出', true);
+  } catch (e) { toast(e.message, false); }
+  $('doPowerOff').disabled = false;
+  $('doPowerOff').textContent = '确认关闭设备';
+});
+
+/* 用户说已经开机: 收起"已关机"面板, 恢复正常报错并立刻重拉一次。
+ * 不在这里假装成功 —— 拉不到就按普通的设备不可达处理, 那才是实情。 */
+$('holdBtn').addEventListener('click', () => {
+  localStorage.removeItem('mifi_hold');
+  setDeviceHold(null);
+  renderHold();
+  toast('正在重新连接设备…', true);
+  if (typeof pollStatus === 'function') pollStatus();
 });
 
 $('devFold').addEventListener('click', () => {
@@ -849,8 +1067,19 @@ if (window.__BOOT__) {
   lastRestRender = Date.now();
   delete window.__BOOT__;
 }
-startPolling('/api/status', d => {
+const pollStatus = startPolling('/api/status', d => {
   status = d;
+  // 轮询成功 = 设备回来了: 重启/关机窗口期到此结束(重启后自动收起状态条)
+  const h = holdState();
+  if (h) {
+    if (h.kind === 'reboot') {
+      endHold(h.sawDown
+        ? '设备已重启完成'
+        : '设备仍在运行，没观察到重启 —— 这条指令在这版固件上可能不生效', h.sawDown);
+    } else {
+      endHold('设备已开机，已重新连上');
+    }
+  }
   renderSpeed(d);
   Native.push(buildNotifyPayload(d));
   if (Date.now() - lastRestRender >= 30000) {
@@ -858,6 +1087,8 @@ startPolling('/api/status', d => {
     lastRestRender = Date.now();
   }
 }, 5000);
+loadAutoOff();          // 单独一次读, 不参与轮询
+renderHold();           // 刷新/重进页面时接着显示上一次未结束的重启或关机状态
 window.addEventListener('resize', drawChart);
 </script>
 </body>

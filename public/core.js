@@ -403,8 +403,9 @@ const md5 = hex_md5;
     return out;
   };
 
+  // 设备返回的 ssid 是大写十六进制 (如 005700490046...), 这里跟着大写, 与固件自己的写法一致
   const uniEncode = (s) => Array.from(s).map(c =>
-    (c.codePointAt(0) & 0xffff).toString(16).padStart(4, '0')).join('');
+    (c.codePointAt(0) & 0xffff).toString(16).padStart(4, '0')).join('').toUpperCase();
 
   function sec2hms(sec) {
     let s = Math.max(0, parseInt(sec || '0', 10) || 0);
@@ -501,6 +502,19 @@ const md5 = hex_md5;
     };
   }
 
+  /** 无线基础配置 (uapxb_wlan_basic_settings): 目前只取「无客户端自动关闭」
+   *  字段 wifi_sleep_time: '0' = 关闭该功能, 10~60 = 空闲多少分钟后自动关闭无线
+   *  status1 里没有这个字段, 必须单独读这个文件 (与原厂无线设置页同源) */
+  function buildWlanBasic(xml) {
+    const ws = (parseXml(xml).RGW || {}).wlan_settings || {};
+    const raw = txt(ws, 'wifi_sleep_time');
+    const n = raw === '' ? NaN : parseInt(raw, 10);
+    const known = Number.isFinite(n);
+    return {
+      autoOff: { minutes: known ? n : null, enabled: known ? n > 0 : null },
+    };
+  }
+
   function buildTraffic(statsXml, freshStatusXml) {
     const x = parseXml(statsXml).RGW;
     const ws = (x.statistics || {}).WanStatistics || {};
@@ -585,8 +599,26 @@ const md5 = hex_md5;
         return { file: 'uapxb_wlan_security_settings', xml: SET_DECL + `<RGW><wlan_security><ssid>${uniEncode(payload.ssid)}</ssid></wlan_security></RGW>` };
       case 'password':
         return { file: 'uapxb_wlan_security_settings', xml: SET_DECL + `<RGW><wlan_security><${payload.mode}><key>${xmlEsc(payload.password)}</key></${payload.mode}></wlan_security></RGW>` };
+      case 'security': {
+        // 名称 + 密码一次写完: 同一个文件、同一个请求, 设备只重启一次无线。
+        // 三个字段一起发(ssid / mode / 当前模式的 key): 设备里 wlan_security 是分模式存密码的,
+        // 只发 <ssid> 有可能把密码块冲掉 —— 改名时把原密码一起回填, 档案才是完整的。
+        if (!payload.ssid) throw new Error('security 需要 ssid');
+        const parts = [`<ssid>${uniEncode(payload.ssid)}</ssid>`];
+        if (payload.mode && payload.password)
+          parts.push(`<mode>${payload.mode}</mode>`, `<${payload.mode}><key>${xmlEsc(payload.password)}</key></${payload.mode}>`);
+        return { file: 'uapxb_wlan_security_settings', xml: SET_DECL + `<RGW><wlan_security>${parts.join('')}</wlan_security></RGW>` };
+      }
       case 'toggle':
+        // 必须显式给 '0' 或 '1'。这里不做"取反", 也不把真值/空值当默认值 ——
+        // 之前 UI 用 wifi.enabled 反推, status 缺失时会"想关反而开了", 而这个开关一旦关掉就无法远程回滚。
+        if (payload.enable !== '0' && payload.enable !== '1')
+          throw new Error('toggle 需要显式 enable="0"（关闭）或 "1"（开启）');
         return { file: 'uapxb_wlan_basic_settings', xml: SET_DECL + `<RGW><wlan_settings><wlan_enable>${payload.enable}</wlan_enable></wlan_settings></RGW>` };
+      case 'autooff':
+        // 原厂 js/panel/wireless/wireless_settings.js#SetWifiSleepTime: 两个字段一起发,
+        // wifi_sleep_action=1 是设备要求的"立即生效"标志, 少发它写入不生效
+        return { file: 'uapxb_wlan_basic_settings', xml: SET_DECL + `<RGW><wlan_settings><wifi_sleep_time>${payload.minutes}</wifi_sleep_time><wifi_sleep_action>1</wifi_sleep_action></wlan_settings></RGW>` };
       case 'sim':
         return { file: 'esim', xml: SET_DECL + `<RGW><esim><simmode>${payload.slot}</simmode>${payload.pw ? `<pw>${xmlEsc(payload.pw)}</pw>` : ''}</esim></RGW>` };
       case 'band': {
@@ -602,6 +634,28 @@ const md5 = hex_md5;
         return { file: 'statistics', xml: SET_DECL + `<RGW><statistics><WanStatistics><total_available_month>${payload.bytes}</total_available_month></WanStatistics></statistics></RGW>` };
     }
     throw new Error('不支持的设置类型');
+  }
+
+  /** 整机动作 (重启 / 关机) —— 和上面的 set 写字段不是一套机制。
+   *
+   *  原厂 js/panel/router/poweroff_router.js 与 reboot_router.js 里, 点「确定」后执行的是
+   *      getData(xmlName)   // xmlName 来自菜单配置: power_off / reset
+   *  即一个 **method=get 的文件请求**, 不带任何 XML body —— 取到这个文件就等于触发动作。
+   *  这是整份固件里唯一"用 get 当按钮"的写法 (其余所有写操作都是 method=set + body),
+   *  所以单独建模, 不要塞进 buildSetXml。
+   *
+   *  没有可回填的响应体, 调用方只能按 认证是否通过 判断成功与否:
+   *  设备执行到一半断开连接是预期现象, 不能当失败。
+   */
+  const DEVICE_ACTIONS = {
+    reboot: { file: 'reset', label: '重启设备' },
+    poweroff: { file: 'power_off', label: '关闭设备' },
+  };
+
+  function buildDeviceAction(kind) {
+    const a = DEVICE_ACTIONS[String(kind || '')];
+    if (!a) throw new Error('不支持的操作');
+    return { file: a.file, label: a.label };
   }
 
   /** 发卡平台响应解析 (单位 MB) */
@@ -635,7 +689,7 @@ const md5 = hex_md5;
   return {
     md5, parseChallenge, loginRequest, authHeader, parseXml, txt,
     uniDecode, uniEncode, xmlEsc, sec2hms, signalBars, NET_MODES,
-    buildStatus, buildTraffic, buildDevices, buildSimInfo, buildBandInfo, bandCurrentFromXml,
-    buildSetXml, buildRemoteTraffic, SIM_SLOTS,
+    buildStatus, buildTraffic, buildDevices, buildSimInfo, buildBandInfo, bandCurrentFromXml, buildWlanBasic,
+    buildSetXml, buildDeviceAction, DEVICE_ACTIONS, buildRemoteTraffic, SIM_SLOTS,
   };
 });

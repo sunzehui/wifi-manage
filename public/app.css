@@ -181,7 +181,40 @@ a.entry-card:hover .entry-arrow { color: var(--blue); transform: translateX(2px)
 /* ============ WiFi 管理 ============ */
 .wifi-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .wifi-name { font-size: 19px; font-weight: 650; word-break: break-all; }
-.wifi-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+/* ---------- 整机操作（重启 / 关机） ----------
+ * 关机是不可远程撤销的操作，视觉上单独成一档：卡片内嵌块 + 红色描边，和普通设置拉开距离。
+ */
+.ops-body { display: grid; gap: 10px; }
+.ops-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--card2);
+}
+.ops-item .ops-main { flex: 1; min-width: 0; }
+.ops-item .ops-t { font-size: 14px; font-weight: 600; }
+.ops-item .ops-d { font-size: 12px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.ops-item .ops-d b { color: var(--text); font-weight: 600; }
+.ops-item .btn { flex: none; }
+.ops-item.danger { border-color: rgba(248, 113, 113, .3); }
+.ops-item.danger .ops-t { color: var(--bad); }
+.ops-item.danger .ops-d b { color: var(--bad); }
+
+/* ---------- 重启 / 关机窗口期的状态条 ---------- */
+.hold {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; margin-bottom: 16px;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--card2);
+}
+.hold .hold-ic { font-size: 20px; flex: none; }
+.hold .hold-main { flex: 1; min-width: 0; }
+.hold .hold-t { font-size: 14px; font-weight: 600; }
+.hold .hold-d { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.hold.warn { border-color: rgba(251, 191, 36, .35); }
+.hold.warn .hold-t { color: var(--warn); }
+.hold.bad { border-color: rgba(248, 113, 113, .4); }
+.hold.bad .hold-t { color: var(--bad); }
+
+.wifi-actions { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 16px; }
+.wifi-note { font-size: 12px; color: var(--muted); line-height: 1.65; margin-top: 10px; }
 
 /* ============ 折叠面板 ============ */
 .fold-btn {
@@ -208,6 +241,7 @@ a.entry-card:hover .entry-arrow { color: var(--blue); transform: translateX(2px)
 }
 .search:focus { outline: none; border-color: var(--blue); }
 .chips { display: flex; gap: 6px; }
+.chips.wrap { flex-wrap: wrap; }
 .chip {
   min-height: 40px; padding: 8px 15px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--line); background: var(--card2); color: var(--muted); font-size: 13px; font-family: inherit;
@@ -266,7 +300,7 @@ tbody tr:last-child td { border-bottom: none; }
 .field label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
 .field .in-row { display: flex; gap: 8px; }
 .field input {
-  flex: 1; min-width: 0; min-height: 46px; font-size: 16px; font-family: inherit;
+  flex: 1; width: 100%; min-width: 0; min-height: 46px; font-size: 16px; font-family: inherit;
   background: var(--card2); border: 1px solid var(--line); border-radius: 10px;
   color: var(--text); padding: 10px 12px;
 }
@@ -307,7 +341,6 @@ footer { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); fon
   .brand .sub { display: none; }
   .card { padding: 15px 16px; }
   .speed-row { gap: 20px; }
-  .wifi-actions { grid-template-columns: 1fr; }
   .wifi-actions .btn { min-height: 46px; }
   .table-wrap { display: none; }
   .cli-cards { display: block; }

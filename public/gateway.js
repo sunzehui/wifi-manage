@@ -221,6 +221,23 @@
     throw why ? failAuth(why) : new Error('设备拒绝了设置请求');
   }
 
+  /** 整机动作 (重启 / 关机): 原厂靠 GET 一个 action 文件触发 (file=reset / power_off),
+   *  响应里不一定有 <RGW> 骨架, 所以不能走 fetchXml。
+   *  设备执行动作时常常先把连接断掉, 那属于预期现象 —— 只有明确被拒才算失败。 */
+  async function triggerAction(file) {
+    if (!ensureSession()) await login();
+    const url = `${cfg().host}/xml_action.cgi?method=get&module=duster&file=${file}&_=${Date.now()}`;
+    let r;
+    try {
+      r = await httpGet(url, authHeader('GET'), 15000);
+    } catch (e) {
+      return;                       // 请求已发出, 设备先行断开
+    }
+    const why = authReason(r.body);
+    if (why) throw failAuth(why);
+    noteLoginResult(true);
+  }
+
   function cacheGet(file, ttlSec) {
     const e = cache.get(file);
     return e && (Date.now() - e.ts) / 1000 <= ttlSec ? e.xml : null;
@@ -317,6 +334,8 @@
       return C.buildSimInfo(x.esim, x.deviceinfo);
     },
     '/api/band': async () => C.buildBandInfo((await fetchSources({ customconfig: 5 })).customconfig),
+    '/api/wifi': async () =>
+      C.buildWlanBasic((await fetchSources({ uapxb_wlan_basic_settings: 20 })).uapxb_wlan_basic_settings),
   };
 
   async function post(path, body) {
@@ -339,11 +358,48 @@
         await postXml(s.file, s.xml);
         return { ok: true, message: 'WiFi 密码已更新，请用新密码重新连接' };
       }
+      if (body.action === 'security') {
+        // 名称 + 密码一条请求写完 (同一文件), 设备只重启一次无线
+        const ssid = String(body.ssid || '').trim();
+        const pwdIn = body.password == null ? '' : String(body.password);
+        if (!ssid) throw new Error('WiFi 名称不能为空');
+        if (new Blob([ssid]).size > 32) throw new Error('WiFi 名称需为 1-32 字节（1 个汉字占 3 字节）');
+        if (pwdIn && !/^[\x20-\x7e]{8,63}$/.test(pwdIn)) throw new Error('密码需为 8-63 位字符，且不含中文或空格');
+        // 改名时把原密码一起带上: 设备按加密模式分块存 key, 只发 ssid 有冲掉密码的风险
+        const sec = (C.parseXml(await fetchXml('uapxb_wlan_security_settings')).RGW || {}).wlan_security || {};
+        const mode = String(sec.mode || '').trim();
+        const encMode = mode.replace(/[^A-Za-z0-9-]/g, '');
+        const encOn = !!encMode && mode !== 'None';
+        if (pwdIn && !encOn) throw new Error('当前 WiFi 未启用加密，请先在设备后台设置加密方式');
+        const password = pwdIn || (encOn ? String((sec[encMode] || {}).key || '') : '');
+        const renamed = ssid !== C.uniDecode(String(sec.ssid || ''));
+        if (!renamed && !pwdIn) return { ok: true, unchanged: true, message: '名称和密码都没有改动' };
+        const s = C.buildSetXml('security', { ssid, mode: encMode, password });
+        await postXml(s.file, s.xml);
+        cacheClear(['status1', 'uapxb_wlan_security_settings']);
+        if (pwdIn) return { ok: true, message: renamed ? 'WiFi 名称和密码已更新，请用新的名称和密码重新连接' : 'WiFi 密码已更新，请用新密码重新连接' };
+        return { ok: true, message: 'WiFi 名称已更新，设备无线将短暂重启' };
+      }
       if (body.action === 'toggle') {
-        const s = C.buildSetXml('toggle', { enable: body.enable === '1' ? '1' : '0' });
+        // 校验在 core.buildSetXml 里 (只接受显式 '0'/'1')
+        const s = C.buildSetXml('toggle', { enable: body.enable });
         await postXml(s.file, s.xml);
         cacheClear(['status1']);
         return { ok: true, message: body.enable === '1' ? 'WiFi 已开启' : 'WiFi 已关闭' };
+      }
+      if (body.action === 'autooff') {
+        // 0 = 关闭「无客户端自动关闭」; 10~60 = 空闲多少分钟后自动关无线 (与原厂校验一致)
+        const minutes = parseInt(body.minutes, 10);
+        if (!(minutes === 0 || (minutes >= 10 && minutes <= 60))) {
+          throw new Error('自动关闭时间需为 10 - 60 分钟，或设为关闭');
+        }
+        const s = C.buildSetXml('autooff', { minutes });
+        await postXml(s.file, s.xml);
+        cacheClear(['uapxb_wlan_basic_settings']);
+        return {
+          ok: true,
+          message: minutes === 0 ? '已关闭「无客户端自动关闭」' : `已设为空闲 ${minutes} 分钟后自动关闭无线`,
+        };
       }
       throw new Error('不支持的操作');
     }
@@ -376,6 +432,21 @@
       await postXml(s.file, s.xml);
       cacheClear(['statistics']);
       return { ok: true, message: gb === 0 ? '已清除流量总量设置' : `流量总量已设置为 ${gb} GB` };
+    }
+    if (path === '/api/router') {
+      const kind = String(body.action || '');
+      if (!C.DEVICE_ACTIONS[kind]) throw new Error('不支持的操作');
+      // 关机后只能按机身电源键开机, 必须前端显式确认
+      if (kind === 'poweroff' && body.confirm !== true) throw new Error('关闭设备需要显式确认');
+      await triggerAction(C.buildDeviceAction(kind).file);
+      cache.clear();                 // 设备即将重启/断电, 缓存的 XML 全部作废
+      return {
+        ok: true,
+        action: kind,
+        message: kind === 'reboot'
+          ? '重启指令已发出，设备正在重启（约 1 分钟恢复）'
+          : '关机指令已发出。设备已断电，需长按机身上的电源键才能重新开机',
+      };
     }
     throw new Error('接口不存在');
   }
