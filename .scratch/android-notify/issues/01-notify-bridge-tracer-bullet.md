@@ -6,7 +6,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done —— 管道全通已取到真机证据；仅剩「点通知拉起」一条待手机接回
 
 - [x] 构建脚本改为编译 APK 壳目录下全部 Kotlin 源文件，构建产物里能确认新增类已进入 dex（而非仅构建返回 0）
 - [x] 清单声明通知权限，并在应用启动时主动申请运行期权限。**工单原文的「targetSdk 28 无需申请」被真机推翻**：测试机是 Android 16（vivo），实测 `POST_NOTIFICATIONS: granted=false`、appops 为 ignore、`numBlocked=6`，一条通知都发不出去。低 targetSdk 只是不强制你申请，系统仍按运行时权限拦截
