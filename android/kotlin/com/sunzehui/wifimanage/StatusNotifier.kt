@@ -14,6 +14,7 @@ import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.util.Log
 import android.webkit.JavascriptInterface
+import org.json.JSONException
 import org.json.JSONObject
 
 /**
@@ -21,7 +22,7 @@ import org.json.JSONObject
  *
  * 显示文案全部由页面侧算好再递过来——速率换算、信号分档、电量文案在 core.js 里
  * 已有实现且受测，这里只做渲染，不再实现第二套换算。两侧唯一的耦合就是
- * [KEYS] 这五个键。
+ * `title / line1 / line2 / ts / bad` 这五个键。
  */
 object StatusNotifier {
 
@@ -30,11 +31,18 @@ object StatusNotifier {
     private const val NOTIF_ID = 1
 
     /**
-     * 载荷契约：title=网络状态, line1=实时速率, line2=设备/信号/电量,
-     * ts=采样时刻(毫秒), bad=是否取不到数据。页面侧与本文件共同依赖这五个键。
+     * 载荷契约：title=网络状态, line1=实时速率, line2=设备/信号/电量(渲染在标题行的副文本位),
+     * ts=采样时刻(毫秒，降级时沿用最后一次成功的时刻), bad=是否取不到数据。
+     * 页面侧与本文件共同依赖这五个键。
      */
     fun show(ctx: Context, json: String) {
-        val o = JSONObject(json)
+        // 页面递的是 JSON.stringify 的结果；万一不是合法 JSON，丢掉这一次而不是让 Activity 崩
+        val o = try {
+            JSONObject(json)
+        } catch (e: JSONException) {
+            Log.w(TAG, "载荷不是合法 JSON，忽略这次推送", e)
+            return
+        }
         val nm = nm(ctx)
         ensureChannel(nm)
         nm.notify(NOTIF_ID, build(ctx, o))
@@ -64,7 +72,7 @@ object StatusNotifier {
             .setContentText(line1)
             .setSubText(o.optString("line2"))
             .setWhen(o.optLong("ts", System.currentTimeMillis()))
-            .setShowWhen(true)          // 「x 秒前」即快照新鲜度，划掉 App 后靠它判断
+            .setShowWhen(true)          // 相对时间是分钟粒度；降级期间 ts 冻结，这个时间会一路走大
             .setOngoing(true)
             .setContentIntent(tapIntent(ctx))
             .setOnlyAlertOnce(true)
@@ -82,12 +90,17 @@ object StatusNotifier {
         return s
     }
 
-    /** 点通知回到仪表盘：复用任务栈，不新开实例 */
+    /**
+     * 点通知回到仪表盘。CLEAR_TOP 在 standard launchMode 下会把已有实例销毁重建（WebView 整页重载），
+     * 叠 SINGLE_TOP 才是「已在栈顶就只投递 onNewIntent」；FLAG_UPDATE_CURRENT 让每次刷新复用的
+     * 是同一个 PendingIntent，而不是一次性 token。
+     */
     private fun tapIntent(ctx: Context): PendingIntent {
         val intent = Intent(ctx, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
-            PendingIntent.FLAG_IMMUTABLE else 0
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        var flags = PendingIntent.FLAG_UPDATE_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) flags = flags or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getActivity(ctx, 0, intent, flags)
     }
 

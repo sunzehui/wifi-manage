@@ -516,7 +516,7 @@ function renderRest(d) {
   const connected = d.network.status === 'connected';
   $('netStateText').textContent = connected ? '已联网' : '未联网';
   $('netStateText').style.color = connected ? 'var(--good)' : 'var(--bad)';
-  $('netTypeBadge').textContent = netTypeName(d.network.mode === 'LTE' ? '17' : d.network.mode);
+  $('netTypeBadge').textContent = netLabel(d.network.mode);
   $('operatorText').textContent = (d.network.operator || '--') + (d.network.roaming ? ' · 漫游中' : '');
   const bars = $('bars');
   bars.className = 'bars ' + signalTone(d.network.rsrpDbm);
@@ -562,7 +562,7 @@ function renderRest(d) {
   $('devModel').textContent = d.device.model;
   $('devFw').textContent = d.device.firmware;
   $('devUptime').textContent = d.lan.uptime;
-  $('devNet').textContent = netTypeName(d.network.mode === 'LTE' ? '17' : d.network.mode);
+  $('devNet').textContent = netLabel(d.network.mode);
   $('dSn').textContent = d.device.sn || '--';
   $('dImei').textContent = d.device.imei || '--';
   $('dIccid').textContent = d.device.iccid || '--';
@@ -824,7 +824,7 @@ if (location.protocol === 'file:' || location.pathname.indexOf('/dashboard') ===
     $('inCfgPass').value = localStorage.getItem('mifi_pass') || '';
     $('inCfgCard').value = localStorage.getItem('mgx_card') || '';
     $('inCfgServer').value = localStorage.getItem('mifi_server') || '';
-    $('inCfgNotify').checked = localStorage.getItem('notify_on') !== '0';   // 默认开
+    $('inCfgNotify').checked = notifyEnabled();   // 默认开
     openModal('ovCfg');
   });
   $('doCfg').addEventListener('click', () => {

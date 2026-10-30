@@ -18,4 +18,6 @@
 - 后台刷新为什么不做：写成两条被点名的砍掉路径（离屏 WebView 承载页面网关 / 网关下沉进 `LocalProxy` 需在 Kotlin 重抄 Digest+XML+字段换算），根因是设备只允许一个管理会话且会话存在页面侧
 - 文件清单补入 `StatusNotifier.kt` 与 `android/res/drawable/ic_stat_mifi.xml`
 - 已知限制：写明 targetSdk 28 仍需运行期申请这条实测结论（原文「提 targetSdk 到 33+ 时才需补」已被真机推翻，README 记的是实际实现）
+- 「What to build」里「划掉应用后保留最后快照并靠相对时间表明有多旧」与本功能另一条已定行为（Activity 销毁即撤条）互斥，README 按后者写：这条通知的含义是「应用最后一次看到的样子」；相对时间的用处改为降级期间显示数据停了多久
+- 代码评审后另修两处与实际不符的表述：相对时间是系统分钟粒度（不是「x 秒前」，也不需要 chronometer），`line2` 的实际渲染位是标题行右侧小字（不是第三行）
 - 逐条对代码核过：`IMPORTANCE_LOW`/`setOnlyAlertOnce`/`setOngoing`/`setShowWhen`/`NOTIF_ID=1`/`tapIntent` 的 `CLEAR_TOP`/`onDestroy` 撤条/`notify_on` 默认开，README 里没有写了但代码没有的能力

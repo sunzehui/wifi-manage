@@ -49,29 +49,38 @@ function nativeCall(fn, arg) {
 }
 const notifyEnabled = () => localStorage.getItem('notify_on') !== '0';   // 默认开
 const Native = {
-  push: payload => { if (notifyEnabled()) nativeCall('updateStatus', JSON.stringify(payload)); },
+  lastGoodTs: 0,   // 最后一次成功采样的时刻, 降级时沿用它, 让相对时间表达「数据从那一刻起就没更新」
+  push(payload) {
+    if (!payload.bad) Native.lastGoodTs = payload.ts;
+    if (notifyEnabled()) nativeCall('updateStatus', JSON.stringify(payload));
+  },
   clear: () => nativeCall('clearStatus'),
 };
 
 /* ---------- 通知栏载荷 ----------
  * 文案全部在这里算齐（速率/信号/电量都复用页面同款格式化函数），原生侧只渲染，
- * 避免出现第二套换算。与 StatusNotifier.kt 的契约就是这五个键。
- * bad=true 表示这组数字来自失败分支，不是设备真实状态。
+ * 避免出现第二套换算。与 StatusNotifier.kt 的契约就是 title/line1/line2/ts/bad 这五个键。
  */
-function buildNotifyPayload(d, bad) {
+function buildNotifyPayload(d) {
   const connected = d.network.status === 'connected';
-  // core.js 回的 network.mode 是短名(LTE/5G NR), 页面还要再过一遍 netTypeName 才显示「4G LTE」;
-  // 这里走同一条映射, 否则通知栏和页面各叫一个名字。
-  const net = netTypeName(d.network.mode === 'LTE' ? '17' : d.network.mode);
-  const batt = !d.battery.present ? '无电池'
-    : d.battery.percent == null ? d.battery.state
-    : `${d.battery.percent}% ${d.battery.state}`;
+  const batt = d.battery.percent == null ? d.battery.state : `${d.battery.percent}% ${d.battery.state}`;
   return {
-    title: `${net} · ${connected ? '已连接' : '未联网'}`,
+    title: `${netLabel(d.network.mode)} · ${connected ? '已连接' : '未联网'}`,
     line1: `↓ ${fmtRate(d.rate.rxRate)} ↑ ${fmtRate(d.rate.txRate)}`,
     line2: `${d.lan.connectedCount} 台在线 · ${signalLabel(d.network.rsrpDbm)} · ${batt}`,
     ts: Date.now(),
-    bad: !!bad,
+    bad: false,
+  };
+}
+
+/** 取不到数据时就地降级这一条：正文用横幅已有的原因，时间戳停在最后一次成功那一刻 */
+function buildDegradedPayload(msg) {
+  return {
+    title: '⚠ 随身WiFi · 状态读取失败',
+    line1: msg,
+    line2: '打开 App 可重试',
+    ts: Native.lastGoodTs || Date.now(),
+    bad: true,
   };
 }
 
@@ -90,6 +99,8 @@ const fmtRate = b => b >= 1 << 20 ? (b / (1 << 20)).toFixed(2) + ' MB/s'
 
 /* ---------- 通俗化解释 ---------- */
 const netTypeName = mode => mode === '17' ? '4G LTE' : mode === '41' || mode === '45' ? '5G' : mode || '--';
+/** 制式名的唯一入口：core.js 把 sys_submode 映射成短名（如 'LTE'），这里再展开成「4G LTE」 */
+const netLabel = mode => netTypeName(mode === 'LTE' ? '17' : mode);
 function signalLabel(rsrpDbm) {
   if (rsrpDbm == null) return '信号未知';
   if (rsrpDbm >= -85) return '信号极好';
@@ -141,21 +152,15 @@ function toast(msg, ok) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => t.classList.remove('show'), 3200);
 }
-function showErrorBanner(msg) {
+function showErrorBanner(msg, notify) {
   const pill = $('netPill');
   pill.className = 'pill bad';
   $('netPillText').textContent = '设备不可达';
   const banner = $('banner');
   banner.textContent = '无法获取设备数据：' + msg + '。请确认电脑已连接到随身 WiFi 的网络。';
   banner.classList.add('show');
-  // 失败也走同一条通知: 复用横幅这句原因文案, 不新起第二条, 也不会静默停在旧数字上
-  Native.push({
-    title: '⚠ 随身WiFi · 设备不可达',
-    line1: msg,
-    line2: '打开 App 可重试',
-    ts: Date.now(),
-    bad: true,
-  });
+  // notify 只有首页会传真：二级页面把通知写成降级后自己不会恢复，那条会一直挂着报错
+  if (notify) Native.push(buildDegradedPayload(msg));
 }
 function hideErrorBanner() { $('banner').classList.remove('show'); }
 
@@ -169,7 +174,8 @@ function startPolling(url, onOk, intervalMs) {
       onOk(await Api.get(url));
       hideErrorBanner();
     } catch (e) {
-      showErrorBanner(e.message);
+      // 只有持有 /api/status 轮询的首页能把降级写进通知：它同时负责在恢复后写回真实数字
+      showErrorBanner(e.message, url.split('?')[0] === '/api/status');
     }
     busy = false;
   }
