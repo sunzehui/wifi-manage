@@ -1,8 +1,8 @@
 # 随身 WiFi 仪表盘
 
 一个本地网页面板 + Android App，实时查看随身 WiFi（LV01 / MF518A03 固件）的联网状态、
-电量、信号、网速、流量、连接设备等信息，并支持修改 WiFi 名称 / 密码、SIM 卡槽切换、
-频段锁定和流量套餐总量设置。
+电量、信号、网速、流量、连接设备等信息，并支持修改 WiFi 名称与密码、空闲自动关闭、
+SIM 卡槽切换、频段锁定、流量套餐总量设置，以及重启 / 关闭设备。
 
 - **后端**: PHP 8.4+（兼容最新 8.5，CI 双版本验证）或 **Node.js**（`server.js`，零依赖，接口一致）
 - **前端**: 零第三方依赖，深色主题，PC / 平板 / 手机自适应，多页面按需加载
@@ -16,12 +16,15 @@
 ```bash
 # 方式一: 环境变量
 WIFI_HOST=http://192.168.1.1 WIFI_USER=admin WIFI_PASS=你的设备密码 \
-  PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8765 -t public server.php
+  PHP_CLI_SERVER_WORKERS=4 php -S 0.0.0.0:8765 -t public server.php
 
 # 方式二: 本地配置文件（复制模板后填写, config.local.php 已加入 .gitignore 不会被提交）
 cp config.local.php.example config.local.php
-PHP_CLI_SERVER_WORKERS=4 php -S 127.0.0.1:8765 -t public server.php
+PHP_CLI_SERVER_WORKERS=4 php -S 0.0.0.0:8765 -t public server.php
 ```
+
+绑定 `0.0.0.0` 是为了让同一 WiFi 下的手机也能访问（见「手机访问」）；只在本机用可改回
+`127.0.0.1`，那样手机连不上。
 
 ## Node.js 版网关
 
@@ -34,12 +37,12 @@ WIFI_PASS=你的设备密码 PORT=8766 node server.js
 
 ## Android App (APK)
 
-`android/wifi-dashboard.apk`（约 760KB，debug 签名，含 Kotlin 运行时）——手机**无需任何服务器**，
+`android/wifi-dashboard.apk`（约 0.8 MB，debug 签名，含 Kotlin 运行时）——手机**无需任何服务器**，
 连接随身 WiFi 后直接使用：
 
 1. 下载 APK 安装（需允许未知来源）
 2. 首次打开点右上角 **⚙** 填设备密码（发卡平台设备号可选），保存在手机本地
-3. 所有功能与网页版一致：状态/网速/流量/设备/WiFi 管理/SIM 切换/频段锁定
+3. 所有功能与网页版一致：状态/网速/流量/设备/WiFi 管理/SIM 切换/频段锁定/设备操作（重启、关机）
 
 原理：页面与内置 JS 网关（`core.js` + `gateway.js`，与 server.js 共享同一套核心逻辑）
 打包进 APK assets；`MainActivity.kt` 在全屏 WebView 之外再起一个本地 HTTP 代理
@@ -106,8 +109,6 @@ macOS 可直接双击 `启动仪表盘.command`（需先创建 config.local.php�
 - 首次从局域网访问时，macOS 可能弹窗询问是否允许 php 接受入站连接，点「允许」即可
 - 仪表盘本身没有登录保护，同一 WiFi 下的设备都能访问；个人自用场景可接受，介意的话不要在公共 WiFi 环境（咖啡馆等）以局域网模式运行
 
-浏览器打开 <http://127.0.0.1:8765>。
-
 ## 页面结构（按需加载，互不拖慢）
 
 | 页面 | 数据接口 | 刷新 | 说明 |
@@ -144,16 +145,16 @@ macOS 可直接双击 `启动仪表盘.command`（需先创建 config.local.php�
 ## 接口
 
 - `GET /api/status` — 首页主数据（状态/信号/电池/速率/WiFi/运行信息）
-- `GET /api/traffic` — 流量统计
+- `GET /api/traffic` — 流量统计（本月/累计、套餐总量与剩余、连接时长）
 - `GET /api/devices` — 连接设备列表
 - `GET /api/summary` — 全量数据（兼容保留）
 - `GET|POST /api/sim` — SIM 卡槽状态 / 切换（`{slot: 0|1|2, pw?}`），复用设备原厂 esim 接口
 - `GET|POST /api/band` — 频段配置 / 锁定（`{bands: [1,3,8,...]}`），复用设备原厂 customconfig 接口
-- `GET /api/traffic` · `POST /api/traffic/quota` — 流量数据 / 套餐总量设置（`{quotaGb: 150}`，0=清除），
+- `POST /api/traffic/quota` — 套餐总量设置（`{quotaGb: 150}`，0=清除），
   写入设备原生 `total_available_month` 字段（与设备后台「流量管理」同一设置），剩余 = 总量 − 设备统计已用
 - `GET /api/remote-traffic` — 发卡平台套餐流量查询（`?refresh=1` 强制刷新，默认 120s 缓存），
   需在 config.local.php 配置 `mgx_card`；进入流量页加载一次，手动刷新，不轮询
-- `GET /api/wifi` — 无线基础配置：目前只取「空闲关闭无线」（`wifi_sleep_time`，`0`=关闭，`10~60`=分钟）
+- `GET /api/wifi` — 无线基础配置：目前只取「空闲自动关闭」（`wifi_sleep_time`，`0`=关闭，`10~60`=分钟）
 - `POST /api/wifi` — `{action: security|autooff, ...}` WiFi 设置，复用设备原厂 set 接口。
   `security` 一次请求同时写名称与密码（可只改其一，不改密码时服务端回填设备原密码，
   保证 `uapxb_wlan_security_settings` 档案完整、无线只重启一次）。
@@ -174,12 +175,16 @@ getXMLDocToString 一致，缺它设备会报 `CGI parse error`），并把设�
 ## 检查与测试
 
 ```bash
-node --test tests/core.test.js     # Digest 固定向量 + 设备列表解析
+node --test tests/core.test.js     # 9 项: Digest 固定向量 / 设备列表解析 / 空闲自动关闭
+                                   #      / 整机动作 / toggle 严格性 / 名称密码合并写入
 php tests/digest_vectors.php       # 同一组向量的 PHP 侧（需 PHP 8.4+）
 ```
 
+测试用的是**假凭据**（`admin` / `testpass`）与假 SSID，不要改成真实设备口令 —— 本仓库是公开的。
+
 CI（`.github/workflows/ci.yml`）在 PHP 8.4 / 8.5 上运行上述两项与页面烟雾测试，
-并用 `node --check` 检查 `server.js` 和 `public/*.js`。
+并用 `node --check` 检查 `server.js` 和 `public/*.js`。触发条件是 **push 到 `main` 或开 PR**——
+在功能分支上直接 push 不会跑，提 PR 时才会验证。
 本机没有 PHP 时可用容器跑同款检查：
 
 ```bash
@@ -199,7 +204,7 @@ docker run --rm -v "$PWD":/app php:8.4 php /app/tests/digest_vectors.php
 - `android/res/drawable/ic_stat_mifi.xml` — 状态栏小图标（24dp 纯白 alpha 矢量 WiFi）
 - `android/tools/make_icon.py` — 程序化生成启动图标（`res/mipmap-*/`、`public/icon.png`）
 - `android/tools/proxy-test/` — 不接手机验证代理的 JVM 冒烟测试（`run.sh`）
-- `tests/` — Node / PHP 单元测试（Digest 固定向量、设备列表解析）
+- `tests/` — Node / PHP 单元测试（Digest 固定向量、设备列表解析、各 set/action 的 XML 构造）
 - `docs/ui-redesign-requirements.md` — 2026-10-25 的 UI 改版需求稿（归档）
 - `启动仪表盘.command` — macOS 双击启动
 - `.mifi_session.json`、`.data_cache.json` — 运行时自动生成的会话与缓存文件
@@ -216,6 +221,7 @@ docker run --rm -v "$PWD":/app php:8.4 php /app/tests/digest_vectors.php
 3. 写设置：`method=set` 通道下发 `uapxb_wlan_security_settings`（SSID 十六进制 UTF-16 编码 /
    按当前加密模式节点写 key）和 `uapxb_wlan_basic_settings`（`wlan_enable` 开关、
    `wifi_sleep_time` + `wifi_sleep_action=1` 空闲自动关闭，后者两个字段必须一起发才生效）。
+   其中 `wlan_enable` 只保留接口、页面不给入口（原因见「说明」）。
 4. 字段换算与原厂后台一致：LTE 时 RSRP=-140+raw dBm、RSRQ=-19.5+raw/2 dB、
    RSSI=-110+raw dBm；电量百分比取 `Battery_voltage`；SSID 为 UTF-16 十六进制编码。
 
@@ -236,15 +242,16 @@ docker run --rm -v "$PWD":/app php:8.4 php /app/tests/digest_vectors.php
 
 - 设备后台本身：<http://192.168.1.1/> （页面右上角有直达链接）
 - 若页面提示"设备不可达"，说明电脑当前不在随身 WiFi 的网络里。
-- WiFi 改名/改密码会使设备无线网络短暂重启，所有连接设备需要重连，页面弹窗中已提示。
-- 「空闲关闭无线」是设备自带功能（原厂无线设置页的 `wifi_sleep_time`）：开着时设备空闲 N 分钟会
-  自己关掉无线，**之后就再也连不回来**（AP 消失，只能到设备上手动打开）。首页可以查看和修改，
-  建议保持「不自动关闭」。
+- 修改 WiFi 名称或密码会使设备无线网络短暂重启（同一次保存只重启一次），所有连接设备需要重连，页面弹窗中已提示。
+- 「空闲自动关闭」是设备自带功能（原厂无线设置页的 `wifi_sleep_time`）：开着时设备空闲 N 分钟会
+  自己关掉无线，**之后就再也连不回来**（AP 消失，页面 / APK / 所有远程入口同时失效；恢复方式取决于
+  机型，固件自带帮助页里没有说明，不要指望软件自救）。首页可以查看和修改，建议保持「不自动关闭」。
 - 因此首页**不提供「关闭 WiFi」按钮**：关掉无线 = 本页面、APK、所有远程入口同时失联，且没有任何
   软件手段能把它重新打开（写 `wlan_enable=1` 的请求也得走这条已经没有的链路）。卡里只显示状态，
-  下方有一行说明。要省电请用「空闲自动关闭」，不要手动关。
+  下方有一行说明。要省电请用「空闲自动关闭」——它同样会让远程入口失效，只是由设备按空闲时间控制，
+  而不是一键把自己关在门外。
 - 「设备操作」里的两项按原厂固件的方式触发（`file=reset` / `file=power_off`，method=get）：
   - **重启**会断开约 1 分钟，页面进入「设备正在重启」状态，恢复后自动收起。由于设备对不认识的文件
     也返回 200 空响应，页面用「它是否真的掉线过」来确认指令生效，没观察到就如实提示可能不支持。
-  - **关机**是不可远程撤销的操作（整机断电，只能长按机身电源键开机），所以是红色弹层 + 勾选确认，
+  - **关机**是不可远程撤销的操作（整机断电，只能按机身电源键开机），所以是红色弹层 + 勾选确认，
     且服务端要求 `confirm: true`；关机后页面停在「设备已关机」，点「我已开机」才恢复正常轮询。
