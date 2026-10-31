@@ -9,6 +9,21 @@ SIM 卡槽切换、频段锁定、流量套餐总量设置，以及重启 / 关�
 - **APK**: WebView 壳 + 内置 JS 网关，手机**无需任何服务器**直连设备（见下）
 - 要求扩展 (PHP): curl / SimpleXML / json / mbstring（见 composer.json）
 
+## 界面预览
+
+手机端与桌面端是同一套页面，按宽度自适应：
+
+<p>
+  <img src="docs/screenshots/home-mobile.webp" width="250" alt="首页：联网状态、信号、电量、实时网速曲线">
+  <img src="docs/screenshots/traffic-mobile.webp" width="250" alt="流量页：本月用量、套餐余量与到期时间">
+  <img src="docs/screenshots/devices-mobile.webp" width="250" alt="设备页：在线 / 离线客户端与各自流量">
+</p>
+
+<img src="docs/screenshots/home-desktop.webp" width="900" alt="桌面端首页：状态、网速、流量三栏并排">
+
+> 截图取自真实设备（LV01 / MF518A03_CN_MGX）。SSID、SN、IMEI、ICCID、MAC 与内网地址
+> 已替换为演示值。
+
 ## 配置
 
 设备密码**不入库**，两种方式任选：
