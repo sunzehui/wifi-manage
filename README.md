@@ -22,7 +22,7 @@ SIM 卡槽切换、频段锁定、流量套餐总量设置，以及重启 / 关�
 <img src="docs/screenshots/home-desktop.webp" width="900" alt="桌面端首页：状态、网速、流量三栏并排">
 
 > 截图取自真实设备（LV01 / MF518A03_CN_MGX）。SSID、SN、IMEI、ICCID、MAC 与内网地址
-> 已替换为演示值。
+> 已替换为演示值；首页网速曲线为补满窗口的示意波形（实际需连续运行约 5 分钟才能画满）。
 
 ## 配置
 
