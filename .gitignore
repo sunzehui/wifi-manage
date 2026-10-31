@@ -11,3 +11,4 @@ node_modules/
 *.idsig
 preset.local.js
 public/preset.js
+.worktrees/
