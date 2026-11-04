@@ -52,10 +52,11 @@ WIFI_PASS=你的设备密码 PORT=8766 node server.js
 
 ## Android App (APK)
 
-`android/wifi-dashboard.apk`（约 0.8 MB，debug 签名，含 Kotlin 运行时）——手机**无需任何服务器**，
+`android/wifi-dashboard.apk`（约 0.8 MB，debug 签名，含 Kotlin 运行时），也可从
+[Releases](https://github.com/sunzehui/wifi-manage/releases/latest) 直接下载 —— 手机**无需任何服务器**，
 连接随身 WiFi 后直接使用：
 
-1. 下载 APK 安装（需允许未知来源）
+1. 安装 APK（需允许未知来源）
 2. 首次打开点右上角 **⚙** 填设备密码（发卡平台设备号可选），保存在手机本地
 3. 所有功能与网页版一致：状态/网速/流量/设备/WiFi 管理/SIM 切换/频段锁定/设备操作（重启、关机）
 
